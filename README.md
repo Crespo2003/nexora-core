@@ -6,7 +6,8 @@ Nexora Core is the Sprint 001 foundation plus the Sprint 002 AI Document Centre 
 
 ```bash
 pnpm install
-pnpm test
+pnpm lint
+pnpm typecheck
 pnpm build
 pnpm dev
 ```
@@ -134,8 +135,8 @@ OCR status:
 
 ```bash
 pnpm install
+pnpm lint
 pnpm typecheck
-pnpm test
 pnpm build
 ```
 

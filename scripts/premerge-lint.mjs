@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 
 function git(args) {
@@ -10,7 +11,9 @@ function read(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 }
 
-const trackedFiles = git(['ls-files', '--cached', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
+const trackedFiles = git(['ls-files', '--cached', '--others', '--exclude-standard'])
+  .split(/\r?\n/)
+  .filter((file) => file && existsSync(new URL(`../${file}`, import.meta.url)));
 const forbiddenTracked = [
   /(^|\/)(node_modules|\.next|dist|build|out|local-uploads|uploaded-documents|test-documents)(\/|$)/,
   /\.(zip|rar|7z|tmp)$/i,
