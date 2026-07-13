@@ -5,11 +5,15 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/sprint002-tests.mjs",
     "start": "next start"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",
+    "mammoth": "1.8.0",
     "next": "14.2.35",
+    "pdf-parse": "1.1.1",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },

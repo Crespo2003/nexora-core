@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'NEXORA V1',
-  description: 'AI Real Estate Operating System'
+  title: 'Nexora Core',
+  description: 'Malaysian property management system'
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
