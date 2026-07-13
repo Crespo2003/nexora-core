@@ -20,7 +20,7 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
-The Sprint 001 server routes use the anon/publishable key so Supabase RLS and Storage policies remain the enforcement layer. Do not expose or configure a service-role key for this browser-facing app unless authentication and authorization are added first.
+The Sprint 001 server routes use the anon/publishable key so Supabase RLS and Storage policies remain the enforcement layer. Do not expose or configure privileged database keys for this browser-facing app unless authentication and authorization are added first.
 
 ## Supabase Setup
 

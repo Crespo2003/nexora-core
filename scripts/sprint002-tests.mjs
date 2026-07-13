@@ -48,4 +48,4 @@ includes('supabase/migrations/202607130002_sprint_002_ai_document_centre.sql', '
 includes('supabase/migrations/202607130002_sprint_002_ai_document_centre.sql', 'storage.objects', 'Storage policies');
 includes('supabase/migrations/202607130002_sprint_002_ai_document_centre.sql', 'create index if not exists', 'Database indexes');
 
-console.log('Sprint 002 verification checks passed.');
+process.stdout.write('Sprint 002 verification checks passed.\n');

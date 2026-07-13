@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "lint": "node scripts/premerge-lint.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/sprint002-tests.mjs",
     "start": "next start"
