@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { TenancyExtraction } from '../../lib/ai/tenancyExtractor';
 import { displayDateToIso, isoToDisplayDate } from '../../lib/dates/formatDate';
 import type { DocumentExtractionRecord, DocumentRecord, DocumentType, ProcessingStatus, UploadQueueItem } from '../../lib/documents/types';
@@ -10,6 +9,7 @@ import { validateDocumentFile } from '../../lib/documents/upload';
 import { formatMYR } from '../../lib/formatters';
 import { defaultLanguage, languageStorageKey, type Language } from '../../lib/i18n/translations';
 import { getDocumentTranslations } from '../../lib/i18n/documentTranslations';
+import { getBrowserSupabaseClient } from '../../lib/supabase/browser';
 
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
 
@@ -76,13 +76,7 @@ const processingStatuses: ProcessingStatus[] = [
   'draft'
 ];
 
-function getSupabaseClient(): SupabaseClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anonKey) return null;
-  return createClient(url, anonKey);
-}
+const getSupabaseClient = getBrowserSupabaseClient;
 
 function cleanNumber(value: unknown): number {
   const number = Number(value ?? 0);
@@ -525,6 +519,7 @@ export default function DocumentsPage() {
           <nav className="top-nav" aria-label="Primary">
             <a className="ghost-button" href="/">{t.navRental}</a>
             <a className="ghost-button active" href="/documents">{t.navDocuments}</a>
+            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
           </nav>
         </div>
       </header>

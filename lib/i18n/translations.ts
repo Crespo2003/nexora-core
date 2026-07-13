@@ -94,7 +94,6 @@ export const translations = {
     agreementRecord: 'TA Memory',
     language: 'Language',
     supabaseLive: 'Supabase live',
-    demoFallback: 'Demo fallback',
     connectionStatus: 'Connection status',
     uploadPdfDocx: 'Upload PDF or DOCX',
     dropDocument: 'Drop a tenancy agreement here or choose a file.',
@@ -139,7 +138,7 @@ export const translations = {
     recording: 'Recording...',
     importing: 'Importing...',
     placeholders: {
-      tenant: 'e.g. Alicia Tan',
+      tenant: 'e.g. Tenant Name',
       landlord: 'e.g. Ryan Holdings Sdn Bhd',
       property: 'e.g. Aria Residence',
       unitNo: 'e.g. A-21-08',
@@ -150,7 +149,6 @@ export const translations = {
       reference: 'Bank reference'
     },
     notices: {
-      demo: 'Demo data shown because Supabase environment variables are missing.',
       connecting: 'Connecting to Supabase rental tables...',
       loaded: 'Supabase connected. Rental tables verified and live data loaded.',
       loadedEmpty: 'Supabase connected. Rental tables verified. Create or import the first tenancy to begin.',
@@ -279,7 +277,6 @@ export const translations = {
     agreementRecord: 'TA 记忆',
     language: '语言',
     supabaseLive: 'Supabase 在线',
-    demoFallback: '演示资料',
     connectionStatus: '连接状态',
     uploadPdfDocx: '上传 PDF 或 DOCX',
     dropDocument: '将租约拖放到这里，或选择文件。',
@@ -324,7 +321,7 @@ export const translations = {
     recording: '记录中...',
     importing: '导入中...',
     placeholders: {
-      tenant: '例如：Alicia Tan',
+      tenant: '例如：租客姓名',
       landlord: '例如：Ryan Holdings Sdn Bhd',
       property: '例如：Aria Residence',
       unitNo: '例如：A-21-08',
@@ -335,7 +332,6 @@ export const translations = {
       reference: '银行参考编号'
     },
     notices: {
-      demo: '由于缺少 Supabase 环境变量，目前显示演示资料。',
       connecting: '正在连接 Supabase 租金资料表...',
       loaded: 'Supabase 已连接。租金资料表已验证，并已载入线上资料。',
       loadedEmpty: 'Supabase 已连接。租金资料表已验证。请创建或导入第一个租约。',

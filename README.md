@@ -131,6 +131,44 @@ OCR status:
 - A provider interface and fallback implementation exist.
 - No third-party OCR provider is configured by default.
 
+## Sprint 003 Live Verification Checklist
+
+Required setup:
+
+- Apply `supabase/migrations/202607131030_sprint_003_smart_collection_utility.sql`.
+- Apply `supabase/migrations/202607131145_sprint_003_live_collection_hardening.sql`.
+- Configure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- Confirm private Storage buckets exist for `real-estate-documents` and `utility-bills`.
+- Confirm RLS, grants, and Storage policies exist for tenancies, rental collections, utility accounts, utility bills, payment ledger, reminders, follow-ups, documents, and activity logs.
+
+Live workflow checks:
+
+1. Create one active tenancy in the Rental Command Centre with landlord, tenant, property, monthly rental, commencement date, expiry date, due day, and auto-generation enabled.
+2. Refresh the app and confirm the tenancy persists from Supabase.
+3. Open `/collections` with no generated collection and confirm the empty state says `No collection records yet.`
+4. Select the target month and run `Generate Monthly Collections`.
+5. Run generation again for the same month and confirm it returns skipped records instead of duplicates.
+6. Refresh `/collections` and confirm the collection record remains visible.
+7. Add or confirm a utility account with provider, normalized account number, property, tenancy, and meter number where available.
+8. Change an account number and confirm the old value is preserved in `utility_account_history`.
+9. Upload a text-based utility bill, review the extracted values, confirm the import, and verify the bill links to the matching tenancy, utility account, document, and collection.
+10. Upload the same bill again and confirm duplicate detection blocks a second import.
+11. Record a partial payment and confirm payment history grows without overwriting older ledger rows.
+12. Record a reversal or refund and confirm Amount Paid equals successful payments minus reversals and refunds.
+13. Confirm Outstanding equals Total Due minus Amount Paid.
+14. Generate an English, Chinese, and bilingual tenant reminder from the live collection.
+15. Copy or mark a reminder as sent and confirm `collection_reminders` stores the action, timestamp, and reminder count.
+16. Mark a follow-up contacted, snoozed, promised-to-pay, or escalated and refresh to confirm the state persists.
+17. Generate a landlord update and confirm it includes collection month, due, received, outstanding, payment date, utility bill status, reminder status, next follow-up, and notes without unnecessary tenant personal data.
+18. Force a database failure in a non-production project and confirm the UI shows an error, preserves user input, and does not show a false success message.
+
+Expected production behavior:
+
+- `/collections` uses live Supabase API responses only.
+- Failed Supabase writes return structured errors and do not fall back to invented records.
+- WhatsApp reminders are copied or opened for review only; the app does not send automatically.
+- Payment ledger rows are the source of truth for received money.
+
 ## Build
 
 ```bash
@@ -176,3 +214,46 @@ pnpm build
 - Confirm Storage policies exist for `real-estate-documents`.
 - Keep the bucket private.
 - Configure server-only secrets in the deployment platform, never in source control.
+
+## Sprint 004 Private Beta Security
+
+Sprint 004 adds Supabase Auth, first-admin setup, workspace ownership, scoped RLS policies, private workspace document paths, and `/admin/system-check`.
+
+Run this migration after Sprint 001-003:
+
+```text
+supabase/migrations/202607131400_sprint_004_auth_workspace_security.sql
+supabase/migrations/202607131600_sprint_004_remove_legacy_permissive_policies.sql
+supabase/migrations/202607131620_sprint_004_security_advisor_hardening.sql
+supabase/migrations/202607131640_sprint_004_final_advisor_hardening.sql
+supabase/migrations/202607140033_sprint_004_secure_legacy_tables.sql
+supabase/migrations/202607140047_sprint_004_legacy_grant_hardening.sql
+```
+
+Use the complete ordered runbook in `DEPLOYMENT_CHECKLIST.md`. Sprint 004 stores new tenancy documents and utility bills in the private `real-estate-documents` bucket under workspace-prefixed paths.
+
+Required Vercel variables:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+```
+
+Private beta setup:
+
+1. Apply all migrations.
+2. Confirm Supabase Email/Password Auth is enabled.
+3. Deploy to Vercel with the required variables.
+4. Create the first auth user from `/login`.
+5. Open `/setup` with that user and create the first workspace.
+6. Open `/admin/system-check` and verify Configured/Connected states.
+7. Create the first tenancy, monthly collection, utility account, utility bill, payment, reminder, and follow-up.
+
+Backup and recovery:
+
+- Before every migration, export a Supabase database backup.
+- Back up private Storage buckets: `real-estate-documents`, `tenancy-documents`, and `utility-bills`.
+- For Vercel rollback, promote the previous deployment and pause new writes while reviewing database state.
+- Restore database backups only after confirming the failed migration changed live data incorrectly.
+- After restore, verify auth login, workspace membership, table RLS, Storage signed URLs, and `/admin/system-check`.
+- Emergency admin recovery should be done in Supabase Dashboard by restoring or correcting `workspace_members` for the owner account. Do not add service-role keys to the browser app.

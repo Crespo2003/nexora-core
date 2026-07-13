@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { CollectionPayload, TenancyPayload } from '../../../../lib/rental/payloads';
-import { getApiErrorMessage, getServerSupabaseClient } from '../../../../lib/supabase/server';
+import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
 type ImportDocument = {
   originalFilename: string;
@@ -14,6 +14,7 @@ type ImportDocument = {
 export async function POST(request: Request) {
   let tenancyId: string | null = null;
   let documentId: string | null = null;
+  let supabase: any;
 
   try {
     const { tenancy, collection, document, extraction } = (await request.json()) as {
@@ -30,7 +31,10 @@ export async function POST(request: Request) {
       };
     };
 
-    const supabase = getServerSupabaseClient();
+    const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
+    if (auth instanceof Response) return auth;
+    ({ supabase } = auth);
+    const { workspaceId } = auth;
 
     const duplicate = await supabase
       .from('tenancies')
@@ -45,7 +49,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'duplicate-tenancy', stage: 'duplicate-check' }, { status: 409 });
     }
 
-    const tenancyInsert = await supabase.from('tenancies').insert(tenancy).select('*').single();
+    const tenancyInsert = await supabase.from('tenancies').insert({ ...tenancy, workspace_id: workspaceId }).select('*').single();
     if (tenancyInsert.error) throw tenancyInsert.error;
     tenancyId = tenancyInsert.data.id;
 
@@ -53,6 +57,7 @@ export async function POST(request: Request) {
       .from('tenancy_documents')
       .insert({
         tenancy_id: tenancyId,
+        workspace_id: workspaceId,
         original_filename: document.originalFilename,
         storage_path: document.storagePath,
         mime_type: document.mimeType,
@@ -68,6 +73,7 @@ export async function POST(request: Request) {
 
     const extractionInsert = await supabase.from('tenancy_extractions').insert({
       tenancy_document_id: documentId,
+      workspace_id: workspaceId,
       extraction_status: extraction.extractionStatus,
       extracted_json: extraction.extractedJson,
       raw_text: extraction.rawText,
@@ -80,7 +86,7 @@ export async function POST(request: Request) {
 
     const collectionInsert = await supabase
       .from('rental_collections')
-      .insert({ ...collection, tenancy_id: tenancyId })
+      .insert({ ...collection, tenancy_id: tenancyId, workspace_id: workspaceId })
       .select('*')
       .single();
 
@@ -92,14 +98,13 @@ export async function POST(request: Request) {
       collection: collectionInsert.data
     });
   } catch (error) {
-    console.error('Confirm tenancy import failed', error);
+    console.error('Confirm tenancy import failed');
 
     try {
-      const supabase = getServerSupabaseClient();
-      if (documentId) await supabase.from('tenancy_documents').delete().eq('id', documentId);
-      if (tenancyId) await supabase.from('tenancies').delete().eq('id', tenancyId);
+      if (supabase && documentId) await supabase.from('tenancy_documents').delete().eq('id', documentId);
+      if (supabase && tenancyId) await supabase.from('tenancies').delete().eq('id', tenancyId);
     } catch (cleanupError) {
-      console.error('Confirm tenancy import cleanup failed', cleanupError);
+      console.error('Confirm tenancy import cleanup failed');
     }
 
     return NextResponse.json({ error: getApiErrorMessage(error), stage: documentId ? 'collection' : tenancyId ? 'document' : 'tenancy' }, { status: 500 });
