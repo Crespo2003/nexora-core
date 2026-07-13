@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { extractTenancyDetails } from '../../../../lib/ai/tenancyExtractor';
 import { parseDocx } from '../../../../lib/documents/parseDocx';
 import { parsePdf } from '../../../../lib/documents/parsePdf';
-import { getApiErrorMessage, getServerSupabaseClient } from '../../../../lib/supabase/server';
+import { validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
+import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
 const maxUploadBytes = 10 * 1024 * 1024;
-const storageBucket = 'tenancy-documents';
+const storageBucket = 'real-estate-documents';
 
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
@@ -15,8 +16,16 @@ function sanitizeStorageFilename(filename: string): string {
 
 export async function POST(request: Request) {
   let uploadedPath: string | null = null;
+  let supabase: any;
 
   try {
+    const requestSizeError = rejectOversizedRequest(request, maxUploadBytes + 1024 * 1024);
+    if (requestSizeError) return requestSizeError;
+    const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
+    if (auth instanceof Response) return auth;
+    ({ supabase } = auth);
+    const { workspaceId } = auth;
+
     const formData = await request.formData();
     const file = formData.get('file');
 
@@ -37,12 +46,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unsupported file type.', stage: 'upload' }, { status: 400 });
     }
 
-    const supabase = getServerSupabaseClient();
-    const storagePath = `tenancy-agreements/${new Date().getFullYear()}/${sanitizeStorageFilename(file.name)}`;
+    const storagePath = workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
     const buffer = Buffer.from(await file.arrayBuffer());
+    const mimeType = isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (!validateFileSignature(buffer, mimeType)) {
+      return NextResponse.json({ error: 'File content does not match its type.', stage: 'upload' }, { status: 400 });
+    }
 
     const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, {
-      contentType: file.type,
+      contentType: mimeType,
       upsert: false
     });
 
@@ -61,21 +73,20 @@ export async function POST(request: Request) {
       document: {
         originalFilename: file.name,
         storagePath,
-        mimeType: file.type || (isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+        mimeType,
         fileSize: file.size,
         documentType: extraction.document.documentType,
         uploadStatus: 'uploaded'
       }
     });
   } catch (error) {
-    console.error('Tenancy document upload/parse failed', error);
+    console.error('Tenancy document upload/parse failed');
 
     if (uploadedPath) {
       try {
-        const supabase = getServerSupabaseClient();
-        await supabase.storage.from(storageBucket).remove([uploadedPath]);
+        await supabase?.storage.from(storageBucket).remove([uploadedPath]);
       } catch (cleanupError) {
-        console.error('Tenancy document upload cleanup failed', cleanupError);
+        console.error('Tenancy document upload cleanup failed');
       }
     }
 

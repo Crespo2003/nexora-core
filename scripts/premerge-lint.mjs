@@ -21,7 +21,7 @@ const forbiddenTracked = [
   /(^|\/)\.env(\.|$)/
 ];
 
-const unwanted = trackedFiles.filter((file) => forbiddenTracked.some((pattern) => pattern.test(file)));
+const unwanted = trackedFiles.filter((file) => file !== '.env.example' && forbiddenTracked.some((pattern) => pattern.test(file)));
 assert.deepEqual(unwanted, [], `Forbidden files are tracked:\n${unwanted.join('\n')}`);
 
 const sourceFiles = trackedFiles.filter((file) =>

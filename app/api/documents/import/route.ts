@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { currentIsoMonth } from '../../../../lib/dates/formatDate';
-import { getApiErrorMessage, getServerSupabaseClient } from '../../../../lib/supabase/server';
+import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
-function collectionForTenancy(tenancyId: string, monthlyRental: number) {
+function collectionForTenancy(tenancyId: string, monthlyRental: number, workspaceId: string) {
   const month = currentIsoMonth();
   const dueDate = `${month}-01`;
 
   return {
     tenancy_id: tenancyId,
+    workspace_id: workspaceId,
     collection_month: dueDate,
     due_date: dueDate,
     rental_amount: monthlyRental,
@@ -26,6 +27,7 @@ function collectionForTenancy(tenancyId: string, monthlyRental: number) {
 export async function POST(request: Request) {
   let tenancyId: string | null = null;
   let importJobId: string | null = null;
+  let supabase: any;
 
   try {
     const { documentId, reviewedJson, importType = 'tenancy_agreement' } = await request.json();
@@ -34,12 +36,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'missing-review', stage: 'review' }, { status: 400 });
     }
 
-    const supabase = getServerSupabaseClient();
+    const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
+    if (auth instanceof Response) return auth;
+    ({ supabase } = auth);
+    const { workspaceId } = auth;
 
     const jobInsert = await supabase
       .from('import_jobs')
       .insert({
         document_id: documentId,
+        workspace_id: workspaceId,
         import_type: importType,
         reviewed_json: reviewedJson,
         import_status: 'saving'
@@ -73,6 +79,7 @@ export async function POST(request: Request) {
       .from('tenancies')
       .insert({
         tenant: reviewedJson.tenant ?? '',
+        workspace_id: workspaceId,
         tenant_id_no: reviewedJson.tenantIdNo ?? '',
         tenant_phone: reviewedJson.tenantPhone ?? '',
         tenant_email: reviewedJson.tenantEmail ?? '',
@@ -108,7 +115,7 @@ export async function POST(request: Request) {
 
     const collectionInsert = await supabase
       .from('rental_collections')
-      .insert(collectionForTenancy(tenancyId, Number(reviewedJson.monthlyRental ?? 0)))
+      .insert(collectionForTenancy(tenancyId, Number(reviewedJson.monthlyRental ?? 0), workspaceId))
       .select('*')
       .single();
 
@@ -116,6 +123,7 @@ export async function POST(request: Request) {
 
     await supabase.from('document_links').insert({
       document_id: documentId,
+      workspace_id: workspaceId,
       entity_type: 'tenancy',
       entity_id: tenancyId,
       link_type: 'source_document'
@@ -136,6 +144,7 @@ export async function POST(request: Request) {
 
     await supabase.from('document_activity').insert({
       document_id: documentId,
+      workspace_id: workspaceId,
       activity_type: 'import_confirmed',
       activity_json: { tenancyId, collectionId: collectionInsert.data.id }
     });
@@ -148,20 +157,19 @@ export async function POST(request: Request) {
       rollbackStatus: 'not_required'
     });
   } catch (error) {
-    console.error('Document Centre import failed', error);
+    console.error('Document Centre import failed');
 
     try {
-      const supabase = getServerSupabaseClient();
-      if (tenancyId) await supabase.from('tenancies').delete().eq('id', tenancyId);
+      if (supabase && tenancyId) await supabase.from('tenancies').delete().eq('id', tenancyId);
       if (importJobId) {
-        await supabase.from('import_jobs').update({
+        await supabase?.from('import_jobs').update({
           import_status: 'failed',
           failed_stage: tenancyId ? 'collection-or-link' : 'tenancy',
           error_message: getApiErrorMessage(error)
         }).eq('id', importJobId);
       }
     } catch (cleanupError) {
-      console.error('Document Centre import cleanup failed', cleanupError);
+      console.error('Document Centre import cleanup failed');
     }
 
     return NextResponse.json({

@@ -4,10 +4,10 @@ import { extractTenancyDetails } from '../../../../lib/ai/tenancyExtractor';
 import { detectScannedDocument } from '../../../../lib/documents/detectScannedDocument';
 import { parseDocx } from '../../../../lib/documents/parseDocx';
 import { parsePdf } from '../../../../lib/documents/parsePdf';
-import { inferMimeTypeFromName, uniqueStoragePath } from '../../../../lib/documents/upload';
+import { inferMimeTypeFromName, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { allowedDocumentMimeTypes, maxDocumentUploadBytes } from '../../../../lib/documents/types';
 import { FallbackOcrProvider } from '../../../../lib/ocr/fallbackOcr';
-import { getApiErrorMessage, getServerSupabaseClient } from '../../../../lib/supabase/server';
+import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
 const storageBucket = 'real-estate-documents';
 
@@ -21,8 +21,16 @@ async function extractText(buffer: Buffer, filename: string, mimeType: string) {
 
 export async function POST(request: Request) {
   let storagePath: string | null = null;
+  let supabase: any;
 
   try {
+    const requestSizeError = rejectOversizedRequest(request, maxDocumentUploadBytes + 1024 * 1024);
+    if (requestSizeError) return requestSizeError;
+    const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
+    if (auth instanceof Response) return auth;
+    ({ supabase } = auth);
+    const { workspaceId } = auth;
+
     const formData = await request.formData();
     const file = formData.get('file');
     const selectedDocumentType = String(formData.get('documentType') ?? '');
@@ -41,9 +49,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'file-too-large', stage: 'upload' }, { status: 400 });
     }
 
-    const supabase = getServerSupabaseClient();
     const buffer = Buffer.from(await file.arrayBuffer());
-    storagePath = uniqueStoragePath(file.name);
+    if (!validateFileSignature(buffer, mimeType)) {
+      return NextResponse.json({ error: 'file-content-mismatch', stage: 'upload' }, { status: 400 });
+    }
+    storagePath = workspaceStoragePath(workspaceId, selectedDocumentType || 'document-centre', file.name);
     const sanitizedFilename = storagePath.split('/').pop() ?? file.name;
 
     const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, {
@@ -66,6 +76,7 @@ export async function POST(request: Request) {
       .from('documents')
       .insert({
         original_filename: file.name,
+        workspace_id: workspaceId,
         sanitized_filename: sanitizedFilename,
         storage_bucket: storageBucket,
         storage_path: storagePath,
@@ -85,6 +96,7 @@ export async function POST(request: Request) {
       .from('document_extractions')
       .insert({
         document_id: documentInsert.data.id,
+        workspace_id: workspaceId,
         extraction_version: 'fallback-v1',
         raw_text: rawText,
         extracted_json: tenancyExtraction ?? {},
@@ -102,6 +114,7 @@ export async function POST(request: Request) {
 
     await supabase.from('document_activity').insert({
       document_id: documentInsert.data.id,
+      workspace_id: workspaceId,
       activity_type: extractionStatus === 'extraction_completed' ? 'extraction_completed' : 'extraction_failed',
       activity_json: { filename: file.name, extractionStatus }
     });
@@ -113,14 +126,13 @@ export async function POST(request: Request) {
       ocrRequired: scanned.ocrRequired
     });
   } catch (error) {
-    console.error('Document Centre upload failed', error);
+    console.error('Document Centre upload failed');
 
     if (storagePath) {
       try {
-        const supabase = getServerSupabaseClient();
-        await supabase.storage.from(storageBucket).remove([storagePath]);
+        await supabase?.storage.from(storageBucket).remove([storagePath]);
       } catch (cleanupError) {
-        console.error('Document Centre upload cleanup failed', cleanupError);
+        console.error('Document Centre upload cleanup failed');
       }
     }
 

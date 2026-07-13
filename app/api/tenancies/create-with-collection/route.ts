@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getApiErrorMessage, getServerSupabaseClient } from '../../../../lib/supabase/server';
+import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import type { CollectionPayload, TenancyPayload } from '../../../../lib/rental/payloads';
 
 export async function POST(request: Request) {
   let createdTenancyId: string | null = null;
+  let supabase: any;
 
   try {
     const { tenancy, collection } = (await request.json()) as {
@@ -11,7 +12,10 @@ export async function POST(request: Request) {
       collection: Omit<CollectionPayload, 'tenancy_id'>;
     };
 
-    const supabase = getServerSupabaseClient();
+    const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
+    if (auth instanceof Response) return auth;
+    ({ supabase } = auth);
+    const { workspaceId } = auth;
 
     const duplicate = await supabase
       .from('tenancies')
@@ -26,13 +30,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'duplicate-tenancy', stage: 'duplicate-check' }, { status: 409 });
     }
 
-    const tenancyInsert = await supabase.from('tenancies').insert(tenancy).select('*').single();
+    const tenancyInsert = await supabase.from('tenancies').insert({ ...tenancy, workspace_id: workspaceId }).select('*').single();
     if (tenancyInsert.error) throw tenancyInsert.error;
     createdTenancyId = tenancyInsert.data.id;
 
     const collectionInsert = await supabase
       .from('rental_collections')
-      .insert({ ...collection, tenancy_id: createdTenancyId })
+      .insert({ ...collection, tenancy_id: createdTenancyId, workspace_id: workspaceId })
       .select('*')
       .single();
 
@@ -43,14 +47,13 @@ export async function POST(request: Request) {
       collection: collectionInsert.data
     });
   } catch (error) {
-    console.error('Create tenancy with collection failed', error);
+    console.error('Create tenancy with collection failed');
 
     if (createdTenancyId) {
       try {
-        const supabase = getServerSupabaseClient();
-        await supabase.from('tenancies').delete().eq('id', createdTenancyId);
+        await supabase?.from('tenancies').delete().eq('id', createdTenancyId);
       } catch (cleanupError) {
-        console.error('Create tenancy cleanup failed', cleanupError);
+        console.error('Create tenancy cleanup failed');
       }
     }
 

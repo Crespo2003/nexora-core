@@ -16,5 +16,16 @@ build/
 test-documents/
 uploaded-documents/
 local-uploads/
+utility-bill-uploads/
+ocr-temp/
+generated-files/
+.test-build/
+playwright-report/
+test-results/
+screenshots/
+trace.zip
+*.webm
+auth-state.json
+storage-test-files/
 Thumbs.db
 .DS_Store

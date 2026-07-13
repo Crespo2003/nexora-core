@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Confidence, TenancyExtraction } from '../lib/ai/tenancyExtractor';
 import {
   compareDisplayDates,
@@ -13,6 +12,7 @@ import {
 } from '../lib/dates/formatDate';
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
+import { getBrowserSupabaseClient } from '../lib/supabase/browser';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -124,13 +124,7 @@ const currency = new Intl.NumberFormat('en-MY', {
   maximumFractionDigits: 0
 });
 
-function getSupabaseClient(): SupabaseClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anonKey) return null;
-  return createClient(url, anonKey);
-}
+const getSupabaseClient = getBrowserSupabaseClient;
 
 function emptyForm(): TenancyForm {
   const today = isoToDisplayDate(todayIso);
@@ -164,64 +158,6 @@ function emptyForm(): TenancyForm {
     notes: ''
   };
 }
-
-const seedTenancies: Tenancy[] = [
-  {
-    id: 'demo-tenancy-1',
-    tenant: 'Peng Ying',
-    tenantIdNo: '',
-    tenantPhone: '',
-    tenantEmail: '',
-    landlord: 'Ryan Holdings',
-    landlordIdNo: '',
-    landlordPhone: '',
-    landlordEmail: '',
-    property: 'Verticas Residensi',
-    unitNo: 'B-16-02',
-    propertyAddress: 'Verticas Residensi, Bukit Ceylon, Kuala Lumpur',
-    propertyType: 'Condominium',
-    monthlyRental: 10000,
-    securityDeposit: 20000,
-    utilityDeposit: 3000,
-    accessCardDeposit: 600,
-    carParkRemoteDeposit: 300,
-    commencementDate: '2026-06-01',
-    expiryDate: '2027-05-31',
-    renewalOption: 'Subject to landlord approval',
-    noticePeriod: '2 months notice',
-    renewalReminder: '2027-03-31',
-    signedTa: 'Signed TA uploaded - Verticas_B1602_TA.pdf',
-    renewalHistory: 'Initial term: 01/06/2026 to 31/05/2027',
-    specialClauses: 'Tenant handles minor repairs below RM300. No short-term sublet.',
-    notes: 'Prefers WhatsApp reminders three days before due date.',
-    status: 'active'
-  }
-];
-
-const seedCollections: RentalCollection[] = [
-  {
-    id: 'demo-collection-1',
-    tenancyId: 'demo-tenancy-1',
-    collectionMonth: '2026-07',
-    dueDate: '2026-07-01',
-    rentalAmount: 10000,
-    tnbAmount: 0,
-    waterAmount: 0,
-    iwkAmount: 0,
-    wifiAmount: 0,
-    aircondAmount: 0,
-    otherCharges: 0,
-    totalDue: 10000,
-    amountPaid: 6500,
-    outstandingBalance: 3500,
-    paymentStatus: 'partial',
-    paymentDate: '2026-07-04',
-    paymentMethod: 'Bank transfer',
-    paymentReference: 'MBB-7781',
-    notes: '',
-    paymentHistory: [{ id: 'demo-payment-1', paidOn: '2026-07-04', amount: 6500, method: 'Bank transfer', reference: 'MBB-7781' }]
-  }
-];
 
 function isMissingTableError(error: unknown): boolean {
   if (typeof error !== 'object' || !error) return false;
@@ -546,16 +482,17 @@ export default function RentalCommandCentre() {
   const [language, setLanguage] = useState<Language>(defaultLanguage);
   const t = getTranslations(language);
   const supabase = useMemo(getSupabaseClient, []);
-  const isDemoMode = !supabase;
-  const [tenancies, setTenancies] = useState<Tenancy[]>(isDemoMode ? seedTenancies : []);
-  const [collections, setCollections] = useState<RentalCollection[]>(isDemoMode ? seedCollections : []);
+  const isSupabaseUnavailable = !supabase;
+  const [tenancies, setTenancies] = useState<Tenancy[]>([]);
+  const [collections, setCollections] = useState<RentalCollection[]>([]);
   const [documents, setDocuments] = useState<TenancyDocument[]>([]);
-  const [selectedTenancyId, setSelectedTenancyId] = useState(isDemoMode ? seedTenancies[0]?.id ?? '' : '');
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [selectedTenancyId, setSelectedTenancyId] = useState('');
   const [editingTenancyId, setEditingTenancyId] = useState<string | null>(null);
   const [form, setForm] = useState<TenancyForm>(emptyForm);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey, string>>>({});
-  const [notice, setNotice] = useState<Notice>({ tone: isDemoMode ? 'warning' : 'info', message: isDemoMode ? t.notices.demo : t.notices.connecting });
-  const [isLoading, setIsLoading] = useState(!isDemoMode);
+  const [notice, setNotice] = useState<Notice>({ tone: isSupabaseUnavailable ? 'warning' : 'info', message: isSupabaseUnavailable ? t.notices.dbConnect : t.notices.connecting });
+  const [isLoading, setIsLoading] = useState(!isSupabaseUnavailable);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState('');
@@ -607,16 +544,19 @@ export default function RentalCommandCentre() {
       const [
         { data: tenancyRows, error: tenancyError },
         { data: collectionRows, error: collectionError },
-        { data: documentRows, error: documentError }
+        { data: documentRows, error: documentError },
+        { data: membershipRows, error: membershipError }
       ] = await Promise.all([
         supabase.from('tenancies').select('*').order('created_at', { ascending: false }),
         supabase.from('rental_collections').select('*').order('collection_month', { ascending: false }),
-        supabase.from('tenancy_documents').select('*').order('uploaded_at', { ascending: false })
+        supabase.from('tenancy_documents').select('*').order('uploaded_at', { ascending: false }),
+        supabase.from('workspace_members').select('workspace_id').eq('status', 'active').limit(1)
       ]);
 
       if (tenancyError) throw tenancyError;
       if (collectionError) throw collectionError;
       if (documentError) throw documentError;
+      if (membershipError) throw membershipError;
 
       const loadedTenancies = (tenancyRows ?? []).map(mapTenancy);
       const loadedCollections = (collectionRows ?? []).map(mapCollection);
@@ -624,10 +564,10 @@ export default function RentalCommandCentre() {
       setTenancies(loadedTenancies);
       setCollections(loadedCollections);
       setDocuments(loadedDocuments);
+      setWorkspaceId(String(membershipRows?.[0]?.workspace_id ?? ''));
       setSelectedTenancyId(loadedTenancies[0]?.id ?? '');
       setNotice({ tone: 'success', message: loadedTenancies.length ? t.notices.loaded : t.notices.loadedEmpty });
     } catch (error) {
-      console.error('Supabase rental data load failed', error);
       setTenancies([]);
       setCollections([]);
       setDocuments([]);
@@ -666,7 +606,7 @@ export default function RentalCommandCentre() {
     try {
       if (editingTenancyId) {
         let saved = tenancyFromForm(form, editingTenancyId);
-        if (supabase && !editingTenancyId.startsWith('demo-')) {
+        if (supabase) {
           const { data, error } = await supabase.from('tenancies').update(tenancyPayload(form)).eq('id', editingTenancyId).select('*').single();
           if (error) throw error;
           saved = mapTenancy(data);
@@ -702,7 +642,6 @@ export default function RentalCommandCentre() {
       }
       resetForm();
     } catch (error) {
-      console.error('Tenancy save failed', error);
       setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
       setOperationId(null);
@@ -722,8 +661,8 @@ export default function RentalCommandCentre() {
     let collection = collectionForTenancy(tenancy);
 
     try {
-      if (supabase && !tenancy.id.startsWith('demo-')) {
-        const { data, error } = await supabase.from('rental_collections').insert(collectionPayload(collection)).select('*').single();
+    if (supabase) {
+        const { data, error } = await supabase.from('rental_collections').insert({ ...collectionPayload(collection), workspace_id: workspaceId }).select('*').single();
         if (error) throw error;
         collection = mapCollection(data);
       }
@@ -733,7 +672,6 @@ export default function RentalCommandCentre() {
       }
       return collection;
     } catch (error) {
-      console.error('Collection create failed', error);
       setNotice({ tone: 'error', message: userError(error, language) });
       return null;
     } finally {
@@ -744,7 +682,7 @@ export default function RentalCommandCentre() {
   async function confirmDeleteTenancy(id: string) {
     setOperationId(`delete-${id}`);
     try {
-      if (supabase && !id.startsWith('demo-')) {
+      if (supabase) {
         const response = await fetch(`/api/tenancies/${id}`, { method: 'DELETE' });
         const payload = await response.json();
         if (!response.ok) throw new Error(apiErrorMessage(payload.error, language));
@@ -756,7 +694,6 @@ export default function RentalCommandCentre() {
       setPendingDeleteId(null);
       setNotice({ tone: 'success', message: t.notices.tenancyDeleted });
     } catch (error) {
-      console.error('Tenancy delete failed', error);
       setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
       setOperationId(null);
@@ -806,7 +743,7 @@ export default function RentalCommandCentre() {
         paymentHistory: [payment, ...collection.paymentHistory]
       };
 
-      if (supabase && !collection.id.startsWith('demo-')) {
+      if (supabase) {
         const { data, error } = await supabase
           .from('rental_collections')
           .update({
@@ -831,7 +768,6 @@ export default function RentalCommandCentre() {
       setPaymentReference('');
       setNotice({ tone: 'success', message: t.notices.paymentRecorded });
     } catch (error) {
-      console.error('Payment save failed', error);
       setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
       setOperationId(null);
@@ -869,7 +805,6 @@ export default function RentalCommandCentre() {
       setImportState('review');
       setNotice({ tone: parsed.document.extractionStatus === 'unreadable' ? 'warning' : 'success', message: parsed.document.extractionStatus === 'unreadable' ? t.scannedWarning : t.extractionReady });
     } catch (error) {
-      console.error('Tenancy import parse failed', error);
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
       setNotice({ tone: 'error', message: `${t.errors.parseFailed} ${userError(error, language)}` });
@@ -941,7 +876,6 @@ export default function RentalCommandCentre() {
       setImportState('success');
       setNotice({ tone: 'success', message: t.notices.importSaved });
     } catch (error) {
-      console.error('Tenancy import save failed', error);
       setImportState('failed');
       setNotice({ tone: 'error', message: `${t.notices.importFailed} ${failedStage}: ${userError(error, language)}` });
     } finally {
@@ -963,7 +897,6 @@ export default function RentalCommandCentre() {
       window.open(payload.signedUrl, '_blank', 'noopener,noreferrer');
       setDocumentViewStatus(t.notices.documentViewReady);
     } catch (error) {
-      console.error('Document view failed', error);
       setDocumentViewStatus(t.notices.documentUnavailable);
       setNotice({ tone: 'error', message: t.notices.documentUnavailable });
     }
@@ -982,8 +915,9 @@ export default function RentalCommandCentre() {
           <nav className="top-nav" aria-label="Primary">
             <a className="ghost-button active" href="/">{t.rentalCommandCentre}</a>
             <a className="ghost-button" href="/documents">{getDocumentTranslations(language).navDocuments}</a>
+            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
           </nav>
-          <div className="live-badge" title={t.connectionStatus}>{isDemoMode ? t.demoFallback : t.supabaseLive}</div>
+          <div className="live-badge" title={t.connectionStatus}>{isSupabaseUnavailable ? t.notices.dbConnect : t.supabaseLive}</div>
         </div>
       </header>
 
