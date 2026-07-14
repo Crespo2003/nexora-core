@@ -1,0 +1,113 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import { extractTenancyDetails } from '../lib/ai/tenancyExtractor';
+import { extractUtilityBill } from '../lib/collections/core';
+import { extractDocumentText } from '../lib/documents/extractText';
+import { maxDocumentPageCount, maxDocumentUploadBytes } from '../lib/documents/types';
+import { validateExtensionMatchesMime, validateFileSignature } from '../lib/documents/upload';
+import { FallbackOcrProvider } from '../lib/ocr/fallbackOcr';
+import { OpenAiOcrProvider } from '../lib/ocr/openAiOcr';
+import type { OcrProvider } from '../lib/ocr/ocrProvider';
+import { checkUploadRateLimit, resetUploadRateLimitsForTests, uploadRateLimit } from '../lib/security/uploadRateLimit';
+
+const syntheticAgreement = `
+TENANCY AGREEMENT
+Landlord: Synthetic Landlord
+Landlord phone: +60120000001
+Tenant: Synthetic Tenant
+Tenant passport: A1234567
+Tenant phone: +60120000002
+Premises address: Unit 8, Synthetic Residence, Kuala Lumpur
+Monthly rental: RM 2,500.00
+Security deposit: RM 5,000.00
+Utility deposit: RM 1,000.00
+Access card deposit: RM 200.00
+Car park remote deposit: RM 100.00
+Commencement date: 01/07/2026
+Expiry date: 30/06/2027
+Rental due day: 1
+Renewal option: One year
+Notice period: Two months notice
+Special clause: Synthetic fixture only.
+`;
+
+const completedOcr = (text: string): OcrProvider => ({ async extractText() { return { status: 'completed', text, error: '' }; } });
+const failedOcr: OcrProvider = { async extractText() { return { status: 'failed', text: '', error: 'synthetic-unreadable' }; } };
+
+test('extracts the required tenancy agreement fields without inventing missing values', () => {
+  const extraction = extractTenancyDetails(syntheticAgreement, 'synthetic-agreement.pdf', 'application/pdf');
+  assert.equal(extraction.landlord.name.value, 'Synthetic Landlord');
+  assert.equal(extraction.tenant.idNo.value, 'A1234567');
+  assert.equal(extraction.financial.monthlyRental.value, '2500.00');
+  assert.equal(extraction.financial.carParkRemoteDeposit.value, '100.00');
+  assert.equal(extraction.dates.rentalDueDay.value, '1');
+  assert.equal(extraction.landlord.email.value, '');
+  assert.equal(extraction.landlord.email.confidence, 'low');
+});
+
+test('processes a scanned tenancy agreement through an injected OCR provider', async () => {
+  const result = await extractDocumentText({ buffer: Buffer.from('synthetic-image'), mimeType: 'image/png', filename: 'agreement.png' }, completedOcr(syntheticAgreement));
+  assert.equal(result.status, 'completed');
+  assert.equal(result.usedOcr, true);
+  assert.match(result.text, /TENANCY AGREEMENT/);
+});
+
+test('extracts utility fields from a synthetic bill image transcription', async () => {
+  const billText = 'TNB\nAccount Number: 123456789\nMeter Number: M123\nRegistered Name: Synthetic Tenant\nService Address: Synthetic Residence\nBill No: B10001\nBill Date: 01/07/2026\nBilling Period: July 2026\nDue Date: 20/07/2026\nTotal Amount Due: RM 180.50';
+  const text = await extractDocumentText({ buffer: Buffer.from('synthetic-image'), mimeType: 'image/png', filename: 'tnb.png' }, completedOcr(billText));
+  const extraction = extractUtilityBill(text.text, 'tnb.png');
+  assert.equal(extraction.provider, 'tnb');
+  assert.equal(extraction.accountNumber, '123456789');
+  assert.equal(extraction.meterNumber, 'M123');
+  assert.equal(extraction.totalAmountDue, 180.5);
+});
+
+test('reports missing OCR configuration and unreadable documents without fake success', async () => {
+  const missing = await extractDocumentText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' }, new FallbackOcrProvider());
+  assert.equal(missing.status, 'not_configured');
+  assert.equal(missing.text, '');
+  const unreadable = await extractDocumentText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' }, failedOcr);
+  assert.equal(unreadable.status, 'failed');
+  assert.equal(unreadable.error, 'synthetic-unreadable');
+});
+
+test('handles malformed OCR responses and provider timeout safely', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ output: [{ content: [{}] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    assert.equal((await new OpenAiOcrProvider('synthetic-key').extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-malformed-or-empty-response');
+    globalThis.fetch = async () => { throw new DOMException('Synthetic timeout', 'AbortError'); };
+    assert.equal((await new OpenAiOcrProvider('synthetic-key').extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-provider-timeout');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('enforces file signatures, extensions, size, page and duplicate foundations', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+  assert.equal(validateFileSignature(png, 'image/png'), true);
+  assert.equal(validateExtensionMatchesMime('bill.png', 'image/png'), true);
+  assert.equal(validateExtensionMatchesMime('bill.pdf', 'image/png'), false);
+  assert.equal(maxDocumentUploadBytes, 10 * 1024 * 1024);
+  assert.equal(maxDocumentPageCount, 25);
+  assert.equal(createHash('sha256').update(png).digest('hex'), createHash('sha256').update(Buffer.from(png)).digest('hex'));
+});
+
+test('rate-limit foundation bounds uploads without automatic retries', () => {
+  resetUploadRateLimitsForTests();
+  const now = Date.now();
+  for (let index = 0; index < uploadRateLimit.maxRequests; index += 1) assert.equal(checkUploadRateLimit('workspace:user', now + index).allowed, true);
+  const blocked = checkUploadRateLimit('workspace:user', now + uploadRateLimit.maxRequests);
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfterSeconds > 0);
+});
+
+test('server OCR secret is absent from client code and public environment names', () => {
+  const client = readFileSync('app/tenancies/[id]/tenancy-workspace.tsx', 'utf8');
+  const example = readFileSync('.env.example', 'utf8');
+  assert.equal(client.includes('OPENAI_API_KEY'), false);
+  assert.equal(example.includes('NEXT_PUBLIC_OPENAI'), false);
+  assert.match(example, /^OPENAI_API_KEY=$/m);
+});

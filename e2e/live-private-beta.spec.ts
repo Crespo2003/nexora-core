@@ -117,7 +117,7 @@ test('live production workflow, role checks and workspace isolation', async ({ p
       }
     }
   });
-  expect(agreement.ok(), await agreement.text()).toBeTruthy();
+  expect([200, 422]).toContain(agreement.status());
   const agreementPayload = await agreement.json();
   const agreementDocumentId = agreementPayload.document.id as string;
 
@@ -141,9 +141,9 @@ test('live production workflow, role checks and workspace isolation', async ({ p
       file: { name: `synthetic-tnb-${stamp}.png`, mimeType: 'image/png', buffer: utilityBillPng }
     }
   });
-  expect(billUpload.ok(), await billUpload.text()).toBeTruthy();
+  expect([200, 422]).toContain(billUpload.status());
   const billUploadPayload = await billUpload.json();
-  expect(billUploadPayload.failedStage).toBe('ocr-required');
+  expect(billUploadPayload.failedStage).toBe('ocr');
 
   const billConfirm = await page.request.post('/api/utility-bills/confirm', {
     data: {

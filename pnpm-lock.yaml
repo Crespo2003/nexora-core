@@ -14,6 +14,9 @@ importers:
       '@supabase/supabase-js':
         specifier: 2.45.4
         version: 2.45.4
+      lucide-react:
+        specifier: 0.468.0
+        version: 0.468.0(react@18.3.1)
       mammoth:
         specifier: 1.8.0
         version: 1.8.0
@@ -247,6 +250,11 @@ packages:
 
   lop@0.4.2:
     resolution: {integrity: sha512-RefILVDQ4DKoRZsJ4Pj22TxE3omDO47yFpkIBoDKzkqPRISs5U1cnAdg/5583YPkWPaLIYHOKRMQSvjFsO26cw==}
+
+  lucide-react@0.468.0:
+    resolution: {integrity: sha512-6koYRhnM2N0GGZIdXzSeiNwguv1gt/FAjZOiPl76roBi3xKEXa4WmfpxgQwTTL4KipXjefrnf3oV4IsYhi4JFA==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
 
   mammoth@1.8.0:
     resolution: {integrity: sha512-pJNfxSk9IEGVpau+tsZFz22ofjUsl2mnA5eT8PjPs2n0BP+rhVte4Nez6FdgEuxv3IGI3afiV46ImKqTGDVlbA==}
@@ -586,6 +594,10 @@ snapshots:
       duck: 0.1.12
       option: 0.2.4
       underscore: 1.13.8
+
+  lucide-react@0.468.0(react@18.3.1):
+    dependencies:
+      react: 18.3.1
 
   mammoth@1.8.0:
     dependencies:

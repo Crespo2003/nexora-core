@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { extractUtilityBill } from '../../../../lib/collections/core';
-import { parseDocx } from '../../../../lib/documents/parseDocx';
-import { parsePdf } from '../../../../lib/documents/parsePdf';
-import { inferMimeTypeFromName, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
+import { extractDocumentText } from '../../../../lib/documents/extractText';
+import { inferMimeTypeFromName, validateExtensionMatchesMime, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { maxDocumentUploadBytes } from '../../../../lib/documents/types';
+import { checkUploadRateLimit } from '../../../../lib/security/uploadRateLimit';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
 const allowedMimeTypes = [
@@ -14,28 +14,31 @@ const allowedMimeTypes = [
   'image/png'
 ];
 
-async function extractText(buffer: Buffer, mimeType: string) {
-  if (mimeType === 'application/pdf') return parsePdf(buffer);
-  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return parseDocx(buffer);
-  return '';
-}
-
 export async function POST(request: Request) {
   const affectedRecordIds: string[] = [];
+  let storagePath: string | null = null;
+  let persistedDocumentId: string | null = null;
+  let supabase: any;
 
   try {
     const requestSizeError = rejectOversizedRequest(request, maxDocumentUploadBytes + 1024 * 1024);
     if (requestSizeError) return requestSizeError;
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent', 'finance'], request);
     if (auth instanceof Response) return auth;
-    const { supabase, workspaceId } = auth;
+    ({ supabase } = auth);
+    const { workspaceId, user } = auth;
+    const rateLimit = checkUploadRateLimit(`${workspaceId}:${user.id}`);
+    if (!rateLimit.allowed) return NextResponse.json({
+      success: false, failedStage: 'rate-limit', affectedRecordIds, rollbackStatus: 'not-required',
+      message: { en: 'Upload limit reached. Try again shortly.', zh: '上传次数已达限制，请稍后再试。' }, technicalReference: 'utility-upload-rate-limit'
+    }, { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } });
 
     const data = await request.formData();
     const file = data.get('file');
     const tenancyId = String(data.get('tenancyId') ?? '');
     const rentalCollectionId = String(data.get('rentalCollectionId') ?? '');
     const provider = String(data.get('provider') ?? 'other');
-    const createCollectionIfMissing = String(data.get('createCollectionIfMissing') ?? 'false') === 'true';
+    const createCollectionIfMissing = String(data.get('createCollectionIfMissing') ?? 'true') !== 'false';
     const collectionMonth = String(data.get('collectionMonth') ?? '');
 
     if (!(file instanceof File) || !tenancyId) {
@@ -59,6 +62,9 @@ export async function POST(request: Request) {
         message: { en: 'Unsupported utility bill file type.', zh: '不支持此账单文件类型。' },
         technicalReference: 'unsupported-utility-file'
       }, { status: 400 });
+    }
+    if (!validateExtensionMatchesMime(file.name, mimeType)) {
+      return NextResponse.json({ success: false, failedStage: 'validation', affectedRecordIds, rollbackStatus: 'not-required', message: { en: 'The filename extension does not match the file type.', zh: '文件扩展名与文件类型不匹配。' }, technicalReference: 'utility-extension-mismatch' }, { status: 400 });
     }
 
     if (file.size > maxDocumentUploadBytes) {
@@ -84,7 +90,7 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
     const documentHash = createHash('sha256').update(buffer).digest('hex');
-    const duplicateDocument = await supabase.from('documents').select('id').eq('document_hash', documentHash).maybeSingle();
+    const duplicateDocument = await supabase.from('documents').select('id').eq('workspace_id', workspaceId).eq('document_hash', documentHash).maybeSingle();
     if (duplicateDocument.error && duplicateDocument.error.code !== '42703') throw duplicateDocument.error;
     if (duplicateDocument.data) {
       return NextResponse.json({
@@ -97,13 +103,17 @@ export async function POST(request: Request) {
       }, { status: 409 });
     }
 
-    const storagePath = workspaceStoragePath(workspaceId, 'utility-bills', file.name);
+    storagePath = workspaceStoragePath(workspaceId, 'utility-bills', file.name);
     const upload = await supabase.storage.from('real-estate-documents').upload(storagePath, buffer, { contentType: mimeType, upsert: false });
     if (upload.error) throw upload.error;
 
-    const rawText = await extractText(buffer, mimeType);
+    const textResult = await extractDocumentText({ buffer, mimeType, filename: file.name });
+    const rawText = textResult.text;
     const extraction = extractUtilityBill(rawText, file.name);
     const reviewedProvider = extraction.provider === 'not_detected' ? provider : extraction.provider;
+    const billMonth = normalizeBillMonth(extraction.billingPeriod, normalizeExtractedDate(extraction.billDate))
+      || collectionMonth.slice(0, 7)
+      || new Date().toISOString().slice(0, 7);
 
     const documentInsert = await supabase
       .from('documents')
@@ -117,13 +127,27 @@ export async function POST(request: Request) {
         file_size: file.size,
         document_type: 'utility_bill',
         upload_status: 'uploaded',
-        processing_status: rawText ? 'pending_review' : 'ocr_required',
-        document_hash: documentHash
+        processing_status: rawText ? 'pending_review' : 'extraction_failed',
+        document_hash: documentHash,
+        processing_attempts: textResult.usedOcr ? 1 : 0,
+        last_processing_error: textResult.error,
+        processing_started_at: new Date().toISOString()
       })
       .select('id')
       .single();
     if (documentInsert.error) throw documentInsert.error;
+    persistedDocumentId = documentInsert.data.id;
     affectedRecordIds.push(documentInsert.data.id);
+
+    const documentLink = await supabase.from('document_links').insert({
+      document_id: documentInsert.data.id,
+      workspace_id: workspaceId,
+      entity_type: 'tenancy',
+      entity_id: tenancyId,
+      link_type: 'utility_bill'
+    });
+    if (documentLink.error) throw documentLink.error;
+    await supabase.from('documents').update({ linked_status: 'linked' }).eq('id', documentInsert.data.id);
 
     const extractionInsert = await supabase
       .from('document_extractions')
@@ -132,10 +156,11 @@ export async function POST(request: Request) {
         workspace_id: workspaceId,
         extraction_version: 'utility-fallback-v1',
         raw_text: rawText,
-        extracted_json: extraction,
+        extracted_json: { ...extraction, provider: reviewedProvider, billMonth },
         confidence_json: { overall: extraction.confidence },
         ai_summary: `Utility bill extraction: ${extraction.confidence}`,
-        extraction_status: rawText ? 'pending_review' : 'ocr_required',
+        extraction_status: rawText ? 'pending_review' : 'extraction_failed',
+        extraction_error: textResult.error || null,
         completed_at: new Date().toISOString()
       })
       .select('id')
@@ -143,67 +168,57 @@ export async function POST(request: Request) {
     if (extractionInsert.error) throw extractionInsert.error;
     affectedRecordIds.push(extractionInsert.data.id);
 
+    const activityInsert = await supabase.from('activity_logs').insert([
+      {
+        entity_type: 'document', entity_id: documentInsert.data.id, workspace_id: workspaceId,
+        activity_type: 'document_uploaded', activity_json: { tenancyId, filename: file.name, documentType: 'utility_bill' }
+      },
+      {
+        entity_type: 'document', entity_id: documentInsert.data.id, workspace_id: workspaceId,
+        activity_type: rawText ? 'extraction_completed' : 'extraction_failed',
+        activity_json: { tenancyId, provider: reviewedProvider, confidence: extraction.confidence }
+      }
+    ]);
+    if (activityInsert.error) throw activityInsert.error;
+
     if (!rawText) {
       return NextResponse.json({
-        success: true,
-        failedStage: 'ocr-required',
+        success: false,
+        failedStage: 'ocr',
         affectedRecordIds,
-        rollbackStatus: 'not-required',
-        message: { en: 'Bill uploaded. OCR review is required before collection updates.', zh: '账单已上传。需要 OCR 检查后才能更新收款。' },
-        technicalReference: 'utility-upload-ocr-required',
+        rollbackStatus: 'document-preserved',
+        message: { en: textResult.status === 'not_configured' ? 'Bill saved, but OCR is not configured.' : 'Bill saved, but extraction failed. You can retry.', zh: textResult.status === 'not_configured' ? '账单已保存，但尚未配置 OCR。' : '账单已保存，但提取失败。您可以重试。' },
+        technicalReference: textResult.error || 'utility-upload-extraction-failed',
         documentId: documentInsert.data.id,
-        extraction
-      });
-    }
-
-    const confirmResponse = await fetch(new URL('/api/utility-bills/confirm', request.url), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: request.headers.get('cookie') ?? '' },
-      body: JSON.stringify({
-        tenancyId,
-        rentalCollectionId: rentalCollectionId || undefined,
-        documentId: documentInsert.data.id,
-        provider: reviewedProvider,
-        accountNumber: extraction.accountNumber,
-        meterNumber: extraction.meterNumber,
-        registeredName: extraction.registeredName,
-        billingAddress: extraction.serviceAddress,
-        billNumber: extraction.billNumber,
-        billDate: normalizeExtractedDate(extraction.billDate),
-        dueDate: normalizeExtractedDate(extraction.dueDate),
-        totalAmountDue: extraction.totalAmountDue ?? 0,
-        extractedJson: extraction,
-        confidenceJson: { overall: extraction.confidence },
-        rawExtractedText: rawText,
-        sourceFilename: file.name,
-        createCollectionIfMissing,
-        collectionMonth
-      })
-    });
-    const confirmPayload = await confirmResponse.json();
-    if (!confirmResponse.ok || !confirmPayload.success) {
-      return NextResponse.json({
-        ...confirmPayload,
-        failedStage: confirmPayload.failedStage ?? 'utility-bill-confirmation',
-        affectedRecordIds: [...affectedRecordIds, ...(confirmPayload.affectedRecordIds ?? [])]
-      }, { status: confirmResponse.status });
+        extraction,
+        retryAllowed: true
+      }, { status: 422 });
     }
 
     return NextResponse.json({
-      ...confirmPayload,
-      affectedRecordIds: [...affectedRecordIds, ...(confirmPayload.affectedRecordIds ?? [])],
-      message: { en: 'Utility bill uploaded, extracted and confirmed.', zh: '水电账单已上传、提取并确认。' },
+      success: true,
+      failedStage: null,
+      affectedRecordIds,
+      rollbackStatus: 'not-required',
+      message: { en: 'Utility bill extracted. Review and confirm before records are updated.', zh: '水电账单已提取。请检查并确认后再更新记录。' },
+      technicalReference: 'utility-upload-review-required',
       documentId: documentInsert.data.id,
-      extraction
+      extraction: { ...extraction, provider: reviewedProvider, billMonth },
+      requiresConfirmation: true,
+      rentalCollectionId: rentalCollectionId || null,
+      createCollectionIfMissing
     });
   } catch (error) {
     console.error('Utility bill upload failed');
+    if (storagePath && !persistedDocumentId) {
+      try { await supabase?.storage.from('real-estate-documents').remove([storagePath]); } catch { /* Best-effort orphan cleanup. */ }
+    }
     return NextResponse.json({
       success: false,
       failedStage: 'server',
       affectedRecordIds,
-      rollbackStatus: 'manual-review',
-      message: { en: 'Utility bill upload failed.', zh: '水电账单上传失败。' },
+      rollbackStatus: persistedDocumentId ? 'document-preserved' : 'storage-cleanup-attempted',
+      message: { en: persistedDocumentId ? 'Bill was saved, but processing did not finish. Retry from review.' : 'Utility bill upload failed.', zh: persistedDocumentId ? '账单已保存，但处理尚未完成。请从检查页面重试。' : '水电账单上传失败。' },
       technicalReference: getApiErrorMessage(error)
     }, { status: 500 });
   }
@@ -214,4 +229,18 @@ function normalizeExtractedDate(value: string) {
   if (!match) return null;
   const year = match[3].length === 2 ? `20${match[3]}` : match[3];
   return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+}
+
+function normalizeBillMonth(value: string, billDate: string | null) {
+  if (billDate) return billDate.slice(0, 7);
+  const numeric = value.match(/(\d{4})[-/]?(\d{1,2})|(?:(\d{1,2})[-/](\d{4}))/);
+  if (numeric) {
+    const year = numeric[1] || numeric[4];
+    const month = numeric[2] || numeric[3];
+    return `${year}-${month.padStart(2, '0')}`;
+  }
+  const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  const named = value.toLowerCase().match(new RegExp(`(${monthNames.join('|')})\\s+(\\d{4})`));
+  if (!named) return '';
+  return `${named[2]}-${String(monthNames.indexOf(named[1]) + 1).padStart(2, '0')}`;
 }

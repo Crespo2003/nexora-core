@@ -11,63 +11,25 @@ export async function POST(request: Request) {
       sentStatus: 'draft' | 'copied' | 'sent' | 'cancelled';
       channel?: string;
     };
-
     if (!payload.rentalCollectionId || !payload.messageText) {
-      return NextResponse.json({
-        success: false,
-        failedStage: 'validation',
-        affectedRecordIds: [],
-        rollbackStatus: 'not-required',
-        message: { en: 'Collection and reminder message are required.', zh: '必须选择收款记录并填写提醒内容。' },
-        technicalReference: 'invalid-reminder'
-      }, { status: 400 });
+      return NextResponse.json({ success: false, failedStage: 'validation', affectedRecordIds: [], rollbackStatus: 'not-required', message: { en: 'Collection and reminder message are required.', zh: '必须选择收款记录并填写提醒内容。' }, technicalReference: 'invalid-reminder' }, { status: 400 });
     }
-
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent', 'finance'], request);
     if (auth instanceof Response) return auth;
-    const { supabase, workspaceId } = auth;
-    const insert = await supabase
-      .from('collection_reminders')
-      .insert({
-        rental_collection_id: payload.rentalCollectionId,
-        workspace_id: workspaceId,
-        reminder_type: payload.reminderType,
-        language: payload.language,
-        message_text: payload.messageText,
-        sent_status: payload.sentStatus,
-        sent_at: payload.sentStatus === 'sent' ? new Date().toISOString() : null,
-        channel: payload.channel ?? 'whatsapp'
-      })
-      .select('id')
-      .single();
-
-    if (insert.error) throw insert.error;
-
-    await supabase.from('activity_logs').insert({
-      entity_type: 'rental_collection',
-      entity_id: payload.rentalCollectionId,
-      workspace_id: workspaceId,
-      activity_type: payload.sentStatus === 'sent' ? 'reminder_marked_sent' : 'reminder_generated',
-      activity_json: { reminderId: insert.data.id, reminderType: payload.reminderType, language: payload.language }
+    const transaction = await auth.supabase.rpc('sprint_005_log_collection_reminder', {
+      p_workspace_id: auth.workspaceId,
+      p_payload: payload
     });
-
+    if (transaction.error) throw transaction.error;
+    const result = transaction.data as { reminder: { id: string } };
     return NextResponse.json({
-      success: true,
-      failedStage: null,
-      affectedRecordIds: [insert.data.id],
-      rollbackStatus: 'not-required',
-      message: { en: 'Reminder logged.', zh: '提醒记录已保存。' },
-      technicalReference: 'sprint-003-reminder-log',
-      reminderId: insert.data.id
+      success: true, failedStage: null, affectedRecordIds: [result.reminder.id], rollbackStatus: 'atomic-transaction',
+      message: { en: 'Reminder logged.', zh: '提醒记录已保存。' }, technicalReference: 'sprint-005-reminder-transaction', reminderId: result.reminder.id
     });
   } catch (error) {
     return NextResponse.json({
-      success: false,
-      failedStage: 'server',
-      affectedRecordIds: [],
-      rollbackStatus: 'manual-review',
-      message: { en: 'Reminder could not be logged.', zh: '无法保存提醒记录。' },
-      technicalReference: getApiErrorMessage(error)
+      success: false, failedStage: 'transaction', affectedRecordIds: [], rollbackStatus: 'rolled-back',
+      message: { en: 'Reminder could not be logged. No records were changed.', zh: '无法保存提醒记录，未更改任何记录。' }, technicalReference: getApiErrorMessage(error)
     }, { status: 500 });
   }
 }
