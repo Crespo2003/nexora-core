@@ -36,6 +36,7 @@ export type TenancyExtraction = {
   dates: {
     commencementDate: ExtractedField;
     expiryDate: ExtractedField;
+    rentalDueDay: ExtractedField;
     renewalOption: ExtractedField;
     noticePeriod: ExtractedField;
     renewalReminder: ExtractedField;
@@ -154,6 +155,7 @@ export function extractTenancyDetails(rawText: string, originalFilename: string,
     dates: {
       commencementDate: findDate(text, [/(?:commencement date|start date)\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})/i]),
       expiryDate: findDate(text, [/(?:expiry date|end date)\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})/i]),
+      rentalDueDay: findFirst(text, [/(?:rental due day|rent due day)\s*[:\-]?\s*(\d{1,2})/i, /rent(?:al)?\s+(?:is\s+)?payable\s+on\s+the\s+(\d{1,2})(?:st|nd|rd|th)?/i]),
       renewalOption: findFirst(text, [/(renewal option\s*[:\-]\s*[^\n]+)/i, /(option to renew\s*[^\n]+)/i]),
       noticePeriod: findFirst(text, [/(notice period\s*[:\-]\s*[^\n]+)/i, /(\d+\s*(?:month|months|day|days)\s+notice)/i]),
       renewalReminder: emptyField()

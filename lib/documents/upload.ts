@@ -36,6 +36,10 @@ export function inferMimeTypeFromName(filename: string) {
   return 'application/octet-stream';
 }
 
+export function validateExtensionMatchesMime(filename: string, mimeType: string) {
+  return inferMimeTypeFromName(filename) === mimeType;
+}
+
 export function uniqueStoragePath(filename: string, bucketFolder = 'document-centre') {
   const year = new Date().getFullYear();
   return `${bucketFolder}/${year}/${sanitizeFilename(filename)}`;

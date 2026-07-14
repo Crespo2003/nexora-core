@@ -82,3 +82,4 @@ export const allowedDocumentMimeTypes = [
 ];
 
 export const maxDocumentUploadBytes = 10 * 1024 * 1024;
+export const maxDocumentPageCount = 25;

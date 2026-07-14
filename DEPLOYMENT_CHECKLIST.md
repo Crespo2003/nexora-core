@@ -143,3 +143,39 @@ Activity logs are immutable. Every permission is scoped to workspace membership.
 4. Preserve Storage objects unless the rollback plan explicitly accounts for database references.
 5. Reverify auth, memberships, RLS, signed URLs, and system check before reopening writes.
 6. Recover an admin by correcting `workspace_members` through the Supabase dashboard; never add a browser service-role key.
+
+## Sprint 005 Private-Beta Verification
+
+Do not use customer documents for this verification. Create a disposable workspace or clearly labelled synthetic records, and take a database backup before applying migrations.
+
+1. Apply `202607140130_sprint_005_ai_tenancy_workspace.sql`.
+2. Apply `202607140230_sprint_005_2_workflow_automation.sql`.
+3. Apply `202607140330_sprint_005_final_blocker_remediation.sql`.
+4. Confirm the new tenancy/document columns, transaction RPCs, workspace-scoped unique indexes, RLS, private buckets, function grants, and migration-history rows.
+5. Run Supabase Security Advisor. Confirm `sprint_004_system_check` is no longer elevated. Review the documented inputless setup probe and one-time authenticated bootstrap exception.
+6. Configure `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `OPENAI_API_KEY`, and optional `OPENAI_OCR_MODEL` in Vercel Preview. Never expose or print the OCR key.
+7. Sign in as an owner and create a synthetic tenancy containing no real identity or banking information.
+8. Open `/tenancies/[id]`; verify property, tenant, landlord, collections, utilities, documents, warnings, extractions, and timeline are live Supabase data.
+9. Upload a synthetic text-based tenancy agreement and verify direct parsing produces a review record.
+10. Upload a synthetic scanned tenancy agreement and verify server-side OCR produces raw text, field confidence, and `Not detected / 未检测到` for missing fields.
+11. Before approval, query or refresh the tenancy and prove no business field changed.
+12. Save corrected extraction fields, refresh, and prove the pending review persists without applying them.
+13. Confirm the extraction; verify tenancy, extraction, document status, and activity log commit together.
+14. Refresh the page and verify all confirmed values persist.
+15. Add a synthetic utility account and verify its masked summary and activity event.
+16. Upload a synthetic utility bill; verify no account, bill, or collection value changes before confirmation.
+17. Confirm the utility bill; verify account matching/creation, bill creation, collection update, extraction completion, and activities commit together.
+18. Record a partial payment and verify amount paid, outstanding balance, status, and activity.
+19. Record a reversal and refund; verify the ledger and collection recalculate consistently after refresh.
+20. Generate a bilingual reminder and persist a follow-up.
+21. Log out and confirm protected pages and mutation routes reject anonymous requests.
+22. Use a second workspace and confirm tenancy IDs, document IDs, account numbers, hashes, and bill numbers cannot be read or mutated across workspaces.
+23. Force one OCR failure, retry it, and verify the same document record is reused and the fourth attempt is refused.
+
+Development-only live OCR command in PowerShell:
+
+```powershell
+$env:LIVE_OCR='1'; $env:OPENAI_API_KEY='<server-key-from-secure-local-env>'; pnpm run test
+```
+
+Expected result: the synthetic live OCR test runs instead of skipping, both generated image fixtures are transcribed, supported fields are extracted with confidence, and omitted fields remain undetected. Remove the temporary process environment values after the run.

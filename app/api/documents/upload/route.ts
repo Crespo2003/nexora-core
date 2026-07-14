@@ -1,26 +1,19 @@
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { classifyDocument } from '../../../../lib/ai/documentClassifier';
 import { extractTenancyDetails } from '../../../../lib/ai/tenancyExtractor';
-import { detectScannedDocument } from '../../../../lib/documents/detectScannedDocument';
-import { parseDocx } from '../../../../lib/documents/parseDocx';
-import { parsePdf } from '../../../../lib/documents/parsePdf';
-import { inferMimeTypeFromName, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
+import { extractDocumentText } from '../../../../lib/documents/extractText';
+import { inferMimeTypeFromName, validateExtensionMatchesMime, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { allowedDocumentMimeTypes, maxDocumentUploadBytes } from '../../../../lib/documents/types';
-import { FallbackOcrProvider } from '../../../../lib/ocr/fallbackOcr';
+import { checkUploadRateLimit } from '../../../../lib/security/uploadRateLimit';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
 
 const storageBucket = 'real-estate-documents';
 
-async function extractText(buffer: Buffer, filename: string, mimeType: string) {
-  if (mimeType === 'application/pdf') return parsePdf(buffer);
-  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return parseDocx(buffer);
-  const ocr = new FallbackOcrProvider();
-  const result = await ocr.extractText({ buffer, filename, mimeType });
-  return result.text;
-}
-
 export async function POST(request: Request) {
   let storagePath: string | null = null;
+  let persistedDocumentId: string | null = null;
   let supabase: any;
 
   try {
@@ -29,14 +22,27 @@ export async function POST(request: Request) {
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
     if (auth instanceof Response) return auth;
     ({ supabase } = auth);
-    const { workspaceId } = auth;
+    const { workspaceId, user } = auth;
+    const rateLimit = checkUploadRateLimit(`${workspaceId}:${user.id}`);
+    if (!rateLimit.allowed) return NextResponse.json({
+      success: false, failedStage: 'rate-limit', affectedRecordIds: [], rollbackStatus: 'not-required',
+      message: { en: 'Upload limit reached. Try again shortly.', zh: '上传次数已达限制，请稍后再试。' },
+      technicalReference: 'document-upload-rate-limit'
+    }, { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } });
 
     const formData = await request.formData();
     const file = formData.get('file');
     const selectedDocumentType = String(formData.get('documentType') ?? '');
+    const tenancyId = String(formData.get('tenancyId') ?? '');
 
     if (!(file instanceof File)) {
       return NextResponse.json({ error: 'no-file', stage: 'upload' }, { status: 400 });
+    }
+
+    if (tenancyId) {
+      const tenancy = await supabase.from('tenancies').select('id').eq('id', tenancyId).eq('workspace_id', workspaceId).maybeSingle();
+      if (tenancy.error) throw tenancy.error;
+      if (!tenancy.data) return NextResponse.json({ error: 'tenancy-not-found', stage: 'upload' }, { status: 404 });
     }
 
     const mimeType = file.type || inferMimeTypeFromName(file.name);
@@ -53,6 +59,19 @@ export async function POST(request: Request) {
     if (!validateFileSignature(buffer, mimeType)) {
       return NextResponse.json({ error: 'file-content-mismatch', stage: 'upload' }, { status: 400 });
     }
+    if (!validateExtensionMatchesMime(file.name, mimeType)) {
+      return NextResponse.json({
+        success: false, failedStage: 'validation', affectedRecordIds: [], rollbackStatus: 'not-required',
+        message: { en: 'The filename extension does not match the file type.', zh: '文件扩展名与文件类型不匹配。' },
+        technicalReference: 'file-extension-mismatch'
+      }, { status: 400 });
+    }
+    const documentHash = createHash('sha256').update(buffer).digest('hex');
+    const duplicate = await supabase.from('documents').select('id').eq('workspace_id', workspaceId).eq('document_hash', documentHash).maybeSingle();
+    if (duplicate.error) throw duplicate.error;
+    if (duplicate.data) {
+      return NextResponse.json({ error: 'duplicate-document', stage: 'duplicate-check', documentId: duplicate.data.id }, { status: 409 });
+    }
     storagePath = workspaceStoragePath(workspaceId, selectedDocumentType || 'document-centre', file.name);
     const sanitizedFilename = storagePath.split('/').pop() ?? file.name;
 
@@ -63,72 +82,67 @@ export async function POST(request: Request) {
 
     if (upload.error) throw upload.error;
 
-    const rawText = await extractText(buffer, file.name, mimeType);
-    const scanned = detectScannedDocument(rawText, mimeType);
+    const textResult = await extractDocumentText({ buffer, filename: file.name, mimeType });
+    const rawText = textResult.text;
     const classification = classifyDocument(rawText, file.name, mimeType);
-    const documentType = selectedDocumentType || classification.documentType;
+    const documentType = classification.confidence === 'low' && selectedDocumentType
+      ? selectedDocumentType
+      : classification.documentType;
     const tenancyExtraction = documentType === 'tenancy_agreement' && rawText
       ? extractTenancyDetails(rawText, file.name, mimeType)
       : null;
-    const extractionStatus = scanned.ocrRequired ? 'ocr_required' : rawText ? 'extraction_completed' : 'extraction_failed';
+    const extractionStatus = textResult.status === 'completed' && rawText ? 'pending_review' : 'extraction_failed';
 
-    const documentInsert = await supabase
-      .from('documents')
-      .insert({
-        original_filename: file.name,
-        workspace_id: workspaceId,
-        sanitized_filename: sanitizedFilename,
-        storage_bucket: storageBucket,
-        storage_path: storagePath,
-        mime_type: mimeType,
-        file_size: file.size,
-        document_type: documentType,
-        upload_status: 'uploaded',
-        processing_status: extractionStatus === 'extraction_completed' ? 'pending_review' : extractionStatus,
-        linked_status: 'unlinked'
-      })
-      .select('*')
-      .single();
-
-    if (documentInsert.error) throw documentInsert.error;
-
-    const extractionInsert = await supabase
-      .from('document_extractions')
-      .insert({
-        document_id: documentInsert.data.id,
-        workspace_id: workspaceId,
-        extraction_version: 'fallback-v1',
-        raw_text: rawText,
-        extracted_json: tenancyExtraction ?? {},
-        confidence_json: tenancyExtraction ?? { classification },
-        ai_summary: tenancyExtraction?.summary ?? (scanned.ocrRequired ? 'OCR required; no readable text extracted.' : 'Document extracted with fallback parser.'),
-        extraction_status: extractionStatus,
-        extraction_error: scanned.ocrRequired ? scanned.reason : null,
-        started_at: new Date().toISOString(),
-        completed_at: new Date().toISOString()
-      })
-      .select('*')
-      .single();
-
-    if (extractionInsert.error) throw extractionInsert.error;
-
-    await supabase.from('document_activity').insert({
-      document_id: documentInsert.data.id,
-      workspace_id: workspaceId,
-      activity_type: extractionStatus === 'extraction_completed' ? 'extraction_completed' : 'extraction_failed',
-      activity_json: { filename: file.name, extractionStatus }
+    const autoPopulation = tenancyExtraction && tenancyId
+      ? tenancyChangesFromExtraction(tenancyExtraction)
+      : { changes: {}, lowConfidenceFields: [] as string[] };
+    const bundle = await supabase.rpc('sprint_005_create_document_bundle', {
+      p_workspace_id: workspaceId,
+      p_payload: {
+        tenancyId: tenancyId || null,
+        originalFilename: file.name,
+        sanitizedFilename,
+        storageBucket,
+        storagePath,
+        mimeType,
+        fileSize: file.size,
+        documentType,
+        processingStatus: extractionStatus,
+        documentHash,
+        processingAttempts: textResult.usedOcr ? 1 : 0,
+        processingError: textResult.error,
+        rawText,
+        extractedJson: tenancyExtraction ?? {},
+        confidenceJson: tenancyExtraction ?? { classification },
+        aiSummary: tenancyExtraction?.summary ?? (textResult.error ? 'Document processing requires attention.' : 'Document extracted and awaiting confirmation.'),
+        lowConfidenceFields: autoPopulation.lowConfidenceFields
+      }
     });
+    if (bundle.error) throw bundle.error;
+    const bundleData = bundle.data as { document: Record<string, unknown> & { id: string }; extraction: Record<string, unknown> & { id: string } };
+    const documentInsert = { data: bundleData.document };
+    const extractionInsert = { data: bundleData.extraction };
+    persistedDocumentId = documentInsert.data.id;
+
+    if (extractionStatus === 'extraction_failed') return NextResponse.json({
+      success: false, failedStage: 'ocr', affectedRecordIds: [documentInsert.data.id, extractionInsert.data.id], rollbackStatus: 'document-preserved',
+      message: { en: textResult.status === 'not_configured' ? 'Document saved, but OCR is not configured.' : 'Document saved, but extraction failed. You can retry.', zh: textResult.status === 'not_configured' ? '文件已保存，但尚未配置 OCR。' : '文件已保存，但提取失败。您可以重试。' },
+      technicalReference: textResult.error || 'document-extraction-failed', document: documentInsert.data, extraction: extractionInsert.data, retryAllowed: true
+    }, { status: 422 });
 
     return NextResponse.json({
+      success: true, failedStage: null, affectedRecordIds: [documentInsert.data.id, extractionInsert.data.id], rollbackStatus: 'not-required',
+      message: { en: 'Document extracted. Review and confirm before records are updated.', zh: '文件已提取。请检查并确认后再更新记录。' },
+      technicalReference: 'document-upload-review-required',
       document: documentInsert.data,
       extraction: extractionInsert.data,
       classification,
-      ocrRequired: scanned.ocrRequired
+      ocrRequired: textResult.usedOcr,
+      pendingConfirmationFields: Object.keys(autoPopulation.changes),
+      lowConfidenceFields: autoPopulation.lowConfidenceFields
     });
   } catch (error) {
-    console.error('Document Centre upload failed');
-
-    if (storagePath) {
+    if (storagePath && !persistedDocumentId) {
       try {
         await supabase?.storage.from(storageBucket).remove([storagePath]);
       } catch (cleanupError) {
@@ -136,6 +150,12 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ error: getApiErrorMessage(error), stage: 'upload' }, { status: 500 });
+    return NextResponse.json({
+      success: false, failedStage: persistedDocumentId ? 'post-upload-processing' : 'upload',
+      affectedRecordIds: persistedDocumentId ? [persistedDocumentId] : [],
+      rollbackStatus: persistedDocumentId ? 'document-preserved' : 'storage-cleanup-attempted',
+      message: { en: persistedDocumentId ? 'Document was saved, but processing did not finish. Retry from the review screen.' : 'Document upload failed.', zh: persistedDocumentId ? '文件已保存，但处理尚未完成。请从检查页面重试。' : '文件上传失败。' },
+      technicalReference: getApiErrorMessage(error)
+    }, { status: 500 });
   }
 }
