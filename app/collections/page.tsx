@@ -396,6 +396,7 @@ export default function CollectionsPage() {
             <a className="ghost-button" href="/">{t.navRental}</a>
             <a className="ghost-button" href="/documents">{t.navDocuments}</a>
             <a className="ghost-button active" href="/collections">{t.title}</a>
+            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
           </nav>
         </div>
       </header>

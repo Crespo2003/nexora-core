@@ -86,6 +86,7 @@ export const config = {
     '/documents/:path*',
     '/collections/:path*',
     '/tenancies/:path*',
+    '/commercial/:path*',
     '/admin/:path*',
     '/login',
     '/forgot-password',
