@@ -1,0 +1,91 @@
+import type { WorkspaceRole } from '../supabase/server';
+
+export type CommercialRole = WorkspaceRole;
+export type ConfidentialityLevel = 'normal' | 'internal_only' | 'restricted' | 'highly_confidential';
+export type RecommendationLevel = 'excellent_match' | 'strong_match' | 'possible_match' | 'weak_match' | 'unsuitable';
+
+export type CommercialRequirement = {
+  id: string;
+  title: string;
+  requirementType: string;
+  businessCategory?: string;
+  transactionType: 'rent' | 'sale' | 'either';
+  preferredLocations: string[];
+  excludedLocations: string[];
+  minBuiltUp?: number | null;
+  maxBuiltUp?: number | null;
+  maxRental?: number | null;
+  maxPurchasePrice?: number | null;
+  frontageRequirement?: number | null;
+  ceilingHeightRequirement?: number | null;
+  groundFloorRequired: boolean;
+  driveThroughRequired: boolean;
+  parkingRequirement?: number | null;
+  loadingBayRequired: boolean;
+  threePhaseRequired: boolean;
+  exhaustRequired: boolean;
+  greaseTrapRequired: boolean;
+  gasRequired: boolean;
+  waterRequired: boolean;
+  signageRequired: boolean;
+  outdoorAreaRequired: boolean;
+  swimmingPoolRequired: boolean;
+  commercialZoningRequired: boolean;
+  commencementTarget?: string | null;
+};
+
+export type CommercialListing = {
+  id: string;
+  title: string;
+  propertyName?: string;
+  propertyType: string;
+  transactionType: 'rent' | 'sale' | 'either';
+  state?: string;
+  city?: string;
+  area?: string;
+  address?: string;
+  concealedAddress?: string;
+  builtUp?: number | null;
+  askingRental?: number | null;
+  askingSalePrice?: number | null;
+  frontage?: number | null;
+  ceilingHeight?: number | null;
+  groundFloor: boolean;
+  corner: boolean;
+  parking?: number | null;
+  loadingBay: boolean;
+  threePhaseElectricity: boolean;
+  exhaust: boolean;
+  greaseTrap: boolean;
+  gas: boolean;
+  water: boolean;
+  signageExposure?: string;
+  outdoorArea: boolean;
+  swimmingPool: boolean;
+  commercialZoning: boolean;
+  currentUse?: string;
+  allowedBusinesses: string[];
+  prohibitedBusinesses: string[];
+  availabilityDate?: string | null;
+  landlordName?: string;
+  landlordContact?: string;
+  confidentialityLevel: ConfidentialityLevel;
+  exactLocationVisibility?: string;
+  assignedUserId?: string | null;
+  photoPaths?: string[];
+  documentPaths?: string[];
+  notes?: string;
+  status: string;
+};
+
+export type MatchResult = {
+  overallScore: number;
+  categoryScores: Record<'location' | 'size' | 'budget' | 'propertyType' | 'operational' | 'timing' | 'zoning' | 'exposure', number>;
+  matchedCriteria: string[];
+  missingCriteria: string[];
+  hardConflicts: string[];
+  warnings: string[];
+  recommendationLevel: RecommendationLevel;
+  explanation: string;
+};
+
