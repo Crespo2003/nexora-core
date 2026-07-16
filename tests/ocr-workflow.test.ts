@@ -47,7 +47,8 @@ const structuredAgreement: TenancyLegalIntelligence = {
   utilities: { tnb: '', water: '', iwk: '', wifi: '' },
   legal: { signatures: '', witnesses: '', stamp_duty: '', inventory: '', restrictions: [], late_payment: '', termination: 'Two months notice', viewing_rights: '', insurance: '', maintenance: '', access_card: '', car_park: '' },
   special_clauses: ['Synthetic fixture only.'], risks: [], warnings: [],
-  field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 }
+  field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 },
+  field_evidence: {}
 };
 
 const structuredResponse = async () => new Response(JSON.stringify({

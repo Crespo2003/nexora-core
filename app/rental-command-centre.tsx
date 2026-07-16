@@ -105,6 +105,7 @@ type UploadedDocument = {
   fileSize: number;
   documentType: string;
   uploadStatus: string;
+  documentHash: string;
 };
 
 type TenancyForm = Omit<Tenancy, 'id' | 'status'>;
@@ -483,6 +484,14 @@ function reviewFormFromExtraction(extraction: TenancyExtraction): ImportReviewFo
   };
 }
 
+function reviewCorrections(extraction: TenancyExtraction, reviewed: ImportReviewForm): Record<string, { extracted: unknown; confirmed: unknown }> {
+  const original = reviewFormFromExtraction(extraction);
+  return Object.fromEntries(Object.keys(reviewed).flatMap((key) => {
+    const field = key as keyof ImportReviewForm;
+    return original[field] === reviewed[field] ? [] : [[key, { extracted: original[field], confirmed: reviewed[field] }]];
+  }));
+}
+
 export default function RentalCommandCentre() {
   const [language, setLanguage] = useState<Language>(defaultLanguage);
   const t = getTranslations(language);
@@ -859,7 +868,7 @@ export default function RentalCommandCentre() {
             extractedJson: extraction.legalIntelligence,
             rawText: reviewForm.rawText,
             aiSummary: reviewForm.summary,
-            confidenceJson: extraction,
+            confidenceJson: { ...extraction, userCorrections: reviewCorrections(extraction, reviewForm) },
             extractionError: extraction.document.extractionStatus === 'unreadable' ? t.scannedWarning : null,
             model: extraction.document.model
           }

@@ -38,7 +38,7 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);
 });
@@ -66,13 +66,60 @@ test('risk engine detects the required Malaysian tenancy review risks', () => {
   assert.match(risks, /witness/);
   assert.match(risks, /stamp duty/);
   assert.match(risks, /conflicting monthly rental/);
-  assert.match(risks, /unlawful or unenforceable/);
+  assert.match(risks, /unusual_forfeiture_or_entry_clause/);
   assert.match(risks, /renewal/);
   assert.match(risks, /inspection/);
   assert.match(risks, /termination/);
   assert.match(risks, /deposit amount/);
   assert.match(risks, /landlord.*details/);
   assert.match(risks, /tenant.*details/);
+  for (const risk of result.risks) {
+    assert.ok(risk.category);
+    assert.ok(risk.reason);
+    assert.ok(risk.recommendation);
+    assert.ok(risk.source_page === null || risk.source_page > 0);
+  }
+});
+
+test('normalizes Malaysian contact, date, percentage, area and notice formats', async () => {
+  const expected = baseExtraction({
+    tenant: { name: 'Tenant', company: '', ic_passport: '900101 14 1234', phone: '012-345 6789', email: 'TENANT@EXAMPLE.COM' },
+    property: { name: 'Premises', unit: '1', address: 'Kuala Lumpur', type: 'Residential', build_up: '1,200 square feet', land_area: '200 square metres', car_parks: '2' },
+    tenancy: { commencement_date: '01/07/2026', expiry_date: '30/06/2027', renewal_option: 'Increase 10 percent', notice_period: 'two (2) months notice', payment_due_day: '1st' },
+    legal: { ...baseExtraction().legal, late_payment: '8 percent per annum', termination: 'two (2) months notice' }
+  });
+  const result = await extractTenancyText(`--- PAGE 1 ---\n${'Malaysian tenancy normalization evidence. '.repeat(5)}`, 'normalization.pdf', {
+    apiKey: 'test', fetcher: async () => responseFor(expected)
+  });
+  assert.equal(result.extraction.tenant.ic_passport, '900101141234');
+  assert.equal(result.extraction.tenant.phone, '+60123456789');
+  assert.equal(result.extraction.tenant.email, 'tenant@example.com');
+  assert.equal(result.extraction.tenancy.commencement_date, '2026-07-01');
+  assert.equal(result.extraction.tenancy.expiry_date, '2027-06-30');
+  assert.equal(result.extraction.tenancy.notice_period, '2 months');
+  assert.equal(result.extraction.tenancy.renewal_option, 'Increase 10%');
+  assert.equal(result.extraction.legal.late_payment, '8% per annum');
+  assert.equal(result.extraction.property.build_up, '1,200 sq ft');
+  assert.equal(result.extraction.property.land_area, '200 sq m');
+});
+
+test('validates field evidence against page-marked source text', async () => {
+  const expected = baseExtraction({
+    field_confidence: { 'tenant.name': 96 },
+    field_evidence: {
+      'tenant.name': { value: 'Tenant', confidence: 96, source_page: 9, source_excerpt: 'Tenant: Tenant' },
+      'landlord.name': { value: 'Landlord', confidence: 99, source_page: 1, source_excerpt: 'not in source' }
+    }
+  });
+  const text = `--- PAGE 1 ---\nTenant: Tenant\n${'Complete agreement clause. '.repeat(5)}`;
+  const result = await extractTenancyText(text, 'evidence.pdf', { apiKey: 'test', fetcher: async () => responseFor(expected) });
+  assert.deepEqual(result.extraction.field_evidence['tenant.name'], {
+    value: 'Tenant', confidence: 96, source_page: 1, source_excerpt: 'Tenant: Tenant'
+  });
+  assert.equal(result.extraction.field_evidence['landlord.name'].source_page, null);
+  assert.equal(result.extraction.field_evidence['landlord.name'].source_excerpt, '');
+  assert.equal(result.extraction.field_evidence['landlord.name'].confidence, 79);
+  assert.match(result.extraction.warnings.join(' '), /landlord\.name could not be verified/i);
 });
 
 test('evaluates 20 Malaysian agreement variants above the 95 percent extraction target', async () => {
@@ -122,8 +169,8 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
     financial: { monthly_rental: 3500, security_deposit: 7000, utility_deposit: 1750, access_card_deposit: 0, car_park_deposit: 0, stamp_duty: 0 },
     tenancy: { commencement_date: '2026-07-01', expiry_date: '2028-06-30', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
     risks: [
-      { code: 'risk_one', severity: 'medium', reason: 'Risk one', recommendation: 'Review one' },
-      { code: 'risk_two', severity: 'high', reason: 'Risk two', recommendation: 'Review two' }
+      { code: 'risk_one', severity: 'medium', category: 'test', reason: 'Risk one', recommendation: 'Review one', source_page: null, source_excerpt: '' },
+      { code: 'risk_two', severity: 'high', category: 'test', reason: 'Risk two', recommendation: 'Review two', source_page: null, source_excerpt: '' }
     ]
   });
   const summary = createTenancySummary(extraction);
@@ -137,7 +184,12 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
 
 test('GPT client retries transient failures and preserves field-level confidence', async () => {
   let calls = 0;
-  const expected = baseExtraction({ field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 } });
+  const expected = baseExtraction({
+    field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 },
+    field_evidence: {
+      'tenant.name': { value: 'Tenant', confidence: 98, source_page: null, source_excerpt: 'Tenant: Tenant' }
+    }
+  });
   const fetcher: typeof fetch = async () => {
     calls += 1;
     return calls < 3 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
@@ -172,6 +224,23 @@ test('Sprint 010 stores structured risks and field confidence without replacing 
   assert.match(migration, /revoke all on function public\.sprint_010_populate_legal_intelligence_columns\(\) from public, anon, authenticated/i);
 });
 
+test('Sprint 011 preserves source references, corrections, duplicate hashes and failed uploads', () => {
+  const migration = readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8');
+  const confirmRoute = readFileSync('app/api/tenancy-import/confirm/route.ts', 'utf8');
+  const uploadRoute = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
+  const commandCentre = readFileSync('app/rental-command-centre.tsx', 'utf8');
+  assert.match(migration, /source_references jsonb not null default '\{\}'::jsonb/i);
+  assert.match(migration, /user_corrections jsonb not null default '\{\}'::jsonb/i);
+  assert.match(migration, /sprint_011_import_tenancy_legal_intelligence/i);
+  assert.match(migration, /set document_hash = imported_document_hash/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(confirmRoute, /\.rpc\('sprint_011_import_tenancy_legal_intelligence'/);
+  assert.match(uploadRoute, /documentHash = createHash\('sha256'\)/);
+  assert.match(uploadRoute, /rollbackStatus: 'document-preserved'/);
+  assert.match(uploadRoute, /sprint_005_create_document_bundle/);
+  assert.match(commandCentre, /userCorrections: reviewCorrections/);
+});
+
 test('Sprint 009 persistence is atomic, workspace-scoped, and writes every required record', () => {
   const migration = readFileSync('supabase/migrations/20260716232802_sprint_009_ai_legal_engine.sql', 'utf8');
   const route = readFileSync('app/api/tenancy-import/confirm/route.ts', 'utf8');
@@ -184,7 +253,8 @@ test('Sprint 009 persistence is atomic, workspace-scoped, and writes every requi
   }
   assert.match(migration, /revoke all on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) from public, anon/i);
   assert.match(migration, /grant execute on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) to authenticated/i);
-  assert.match(route, /\.rpc\('sprint_009_import_tenancy_legal_intelligence'/);
+  assert.match(route, /\.rpc\('sprint_011_import_tenancy_legal_intelligence'/);
+  assert.match(readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8'), /public\.sprint_009_import_tenancy_legal_intelligence\(p_workspace_id, p_payload\)/);
   assert.doesNotMatch(route, /service[_-]?role/i);
 });
 
@@ -198,7 +268,7 @@ function baseExtraction(overrides: Partial<TenancyLegalIntelligence> = {}): Tena
     tenancy: { commencement_date: '2026-01-01', expiry_date: '2027-01-01', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
     utilities: { tnb: '', water: '', iwk: '', wifi: '' },
     legal: { signatures: 'Signed', witnesses: 'Witness One', stamp_duty: 'RM100', inventory: 'Attached', restrictions: [], late_payment: '', termination: 'Two months notice', viewing_rights: 'Prior notice', insurance: '', maintenance: 'Tenant minor repairs', access_card: '', car_park: '' },
-    special_clauses: [], risks: [], warnings: [], field_confidence: {}
+    special_clauses: [], risks: [], warnings: [], field_confidence: {}, field_evidence: {}
   };
   return {
     ...base,
@@ -213,7 +283,8 @@ function baseExtraction(overrides: Partial<TenancyLegalIntelligence> = {}): Tena
     special_clauses: overrides.special_clauses ?? base.special_clauses,
     risks: overrides.risks ?? base.risks,
     warnings: overrides.warnings ?? base.warnings,
-    field_confidence: overrides.field_confidence ?? base.field_confidence
+    field_confidence: overrides.field_confidence ?? base.field_confidence,
+    field_evidence: overrides.field_evidence ?? base.field_evidence
   };
 }
 

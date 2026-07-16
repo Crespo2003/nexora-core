@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { extractTenancyFile } from '../../../../lib/ai/tenancyExtractor';
 import { validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
 
     const storagePath = workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
     const buffer = Buffer.from(await file.arrayBuffer());
+    const documentHash = createHash('sha256').update(buffer).digest('hex');
     const mimeType = isPdf
       ? 'application/pdf'
       : isDocx
@@ -56,6 +58,15 @@ export async function POST(request: Request) {
         : 'text/plain';
     if (!validateFileSignature(buffer, mimeType)) {
       return NextResponse.json({ error: 'File content does not match its type.', stage: 'upload' }, { status: 400 });
+    }
+    const duplicate = await supabase.from('documents').select('id, processing_status')
+      .eq('workspace_id', workspaceId).eq('document_hash', documentHash).maybeSingle();
+    if (duplicate.error) throw duplicate.error;
+    if (duplicate.data) {
+      return NextResponse.json({
+        error: 'duplicate-document', stage: 'duplicate-check', documentId: duplicate.data.id,
+        retryAllowed: ['ocr_required', 'extraction_failed'].includes(String(duplicate.data.processing_status))
+      }, { status: 409 });
     }
 
     const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, {
@@ -66,7 +77,47 @@ export async function POST(request: Request) {
     if (upload.error) throw upload.error;
     uploadedPath = storagePath;
 
-    const extraction = await extractTenancyFile({ buffer, filename: file.name, mimeType });
+    let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
+    try {
+      extraction = await extractTenancyFile({ buffer, filename: file.name, mimeType });
+    } catch (error) {
+      const technicalReference = getApiErrorMessage(error);
+      const sanitizedFilename = storagePath.split('/').pop() ?? file.name;
+      const bundle = await supabase.rpc('sprint_005_create_document_bundle', {
+        p_workspace_id: workspaceId,
+        p_payload: {
+          tenancyId: null,
+          originalFilename: file.name,
+          sanitizedFilename,
+          storageBucket,
+          storagePath,
+          mimeType,
+          fileSize: file.size,
+          documentType: 'tenancy_agreement',
+          processingStatus: 'extraction_failed',
+          documentHash,
+          processingAttempts: 1,
+          processingError: technicalReference,
+          rawText: '',
+          extractedJson: {},
+          confidenceJson: {},
+          aiSummary: 'Document preserved after extraction failure. Retry processing from Document Centre.',
+          lowConfidenceFields: []
+        }
+      });
+      if (bundle.error) throw bundle.error;
+      uploadedPath = null;
+      const saved = bundle.data as { document: { id: string }; extraction: { id: string } };
+      return NextResponse.json({
+        error: 'document-extraction-failed', stage: 'extraction', documentId: saved.document.id,
+        extractionId: saved.extraction.id, retryAllowed: true, rollbackStatus: 'document-preserved',
+        message: {
+          en: 'The document was saved, but extraction failed. Retry it from Document Centre.',
+          zh: '文件已保存，但提取失败。请从文件中心重试。'
+        },
+        technicalReference
+      }, { status: 422 });
+    }
 
     return NextResponse.json({
       extraction,
@@ -76,7 +127,8 @@ export async function POST(request: Request) {
         mimeType,
         fileSize: file.size,
         documentType: extraction.document.documentType,
-        uploadStatus: 'uploaded'
+        uploadStatus: 'uploaded',
+        documentHash
       }
     });
   } catch (error) {

@@ -19,5 +19,6 @@ export async function parsePdfDocument(buffer: Buffer): Promise<{ text: string; 
       return text;
     }
   });
-  return { text: result.text.trim(), pageCount: Number(result.numpages ?? pageTexts.length), pageTexts };
+  const text = pageTexts.map((pageText, index) => `--- PAGE ${index + 1} ---\n${pageText}`).join('\n\n').trim();
+  return { text: text || result.text.trim(), pageCount: Number(result.numpages ?? pageTexts.length), pageTexts };
 }

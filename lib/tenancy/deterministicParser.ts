@@ -121,6 +121,7 @@ function toLegalIntelligence(
     legal: { signatures: '', witnesses: '', stamp_duty: '', inventory: '', restrictions: clauses.illegalActivityRestriction.value ? [clauses.illegalActivityRestriction.value] : [], late_payment: '', termination: clauses.terminationClause.value, viewing_rights: clauses.viewingClause.value, insurance: '', maintenance: clauses.otherObligations.value, access_card: '', car_park: '' },
     special_clauses: [clauses.renewalClause.value, clauses.terminationClause.value, clauses.diplomaticClause.value, clauses.viewingClause.value, clauses.illegalActivityRestriction.value, clauses.petClause.value, clauses.specialClauses.value, clauses.otherObligations.value].filter(Boolean),
     risks: [], warnings: ['Advanced AI extraction was unavailable; deterministic fallback results require review.'],
+    field_evidence: {},
     field_confidence: {
       'tenant.name': pct(tenant.name), 'tenant.ic_passport': pct(tenant.idNo), 'tenant.phone': pct(tenant.phone), 'tenant.email': pct(tenant.email),
       'landlord.name': pct(landlord.name), 'landlord.ic_passport': pct(landlord.idNo), 'landlord.phone': pct(landlord.phone), 'landlord.email': pct(landlord.email),
