@@ -31,6 +31,7 @@ export function inferMimeTypeFromName(filename: string) {
   const lower = filename.toLowerCase();
   if (lower.endsWith('.pdf')) return 'application/pdf';
   if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (lower.endsWith('.txt')) return 'text/plain';
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
   if (lower.endsWith('.png')) return 'image/png';
   return 'application/octet-stream';
@@ -46,6 +47,13 @@ export function uniqueStoragePath(filename: string, bucketFolder = 'document-cen
 }
 
 export function validateFileSignature(buffer: Buffer, mimeType: string) {
+  if (mimeType === 'text/plain') {
+    if (!buffer.length || buffer.includes(0)) return false;
+    const text = buffer.toString('utf8');
+    const replacementCount = (text.match(/\uFFFD/g) ?? []).length;
+    return replacementCount / Math.max(text.length, 1) < 0.01;
+  }
+
   if (buffer.length < 4) return false;
 
   if (mimeType === 'application/pdf') {

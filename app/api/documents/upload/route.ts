@@ -11,6 +11,8 @@ import { tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/
 
 const storageBucket = 'real-estate-documents';
 
+export const maxDuration = 300;
+
 export async function POST(request: Request) {
   let storagePath: string | null = null;
   let persistedDocumentId: string | null = null;
@@ -89,7 +91,7 @@ export async function POST(request: Request) {
       ? selectedDocumentType
       : classification.documentType;
     const tenancyExtraction = documentType === 'tenancy_agreement' && rawText
-      ? extractTenancyDetails(rawText, file.name, mimeType)
+      ? await extractTenancyDetails(rawText, file.name, mimeType)
       : null;
     const extractionStatus = textResult.status === 'completed' && rawText ? 'pending_review' : 'extraction_failed';
 

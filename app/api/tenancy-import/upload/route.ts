@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { extractTenancyDetails } from '../../../../lib/ai/tenancyExtractor';
-import { parseDocx } from '../../../../lib/documents/parseDocx';
-import { parsePdf } from '../../../../lib/documents/parsePdf';
+import { extractTenancyFile } from '../../../../lib/ai/tenancyExtractor';
 import { validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 
 const maxUploadBytes = 10 * 1024 * 1024;
 const storageBucket = 'real-estate-documents';
+
+export const maxDuration = 300;
 
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
@@ -41,14 +41,19 @@ export async function POST(request: Request) {
     const isDocx =
       file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       file.name.toLowerCase().endsWith('.docx');
+    const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
 
-    if (!isPdf && !isDocx) {
+    if (!isPdf && !isDocx && !isTxt) {
       return NextResponse.json({ error: 'Unsupported file type.', stage: 'upload' }, { status: 400 });
     }
 
     const storagePath = workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
     const buffer = Buffer.from(await file.arrayBuffer());
-    const mimeType = isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const mimeType = isPdf
+      ? 'application/pdf'
+      : isDocx
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        : 'text/plain';
     if (!validateFileSignature(buffer, mimeType)) {
       return NextResponse.json({ error: 'File content does not match its type.', stage: 'upload' }, { status: 400 });
     }
@@ -61,12 +66,7 @@ export async function POST(request: Request) {
     if (upload.error) throw upload.error;
     uploadedPath = storagePath;
 
-    const text = isPdf ? await parsePdf(buffer) : await parseDocx(buffer);
-    const extraction = extractTenancyDetails(
-      text,
-      file.name,
-      file.type || (isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-    );
+    const extraction = await extractTenancyFile({ buffer, filename: file.name, mimeType });
 
     return NextResponse.json({
       extraction,

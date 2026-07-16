@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { extractTenancyDetails } from '../lib/ai/tenancyExtractor';
+import type { TenancyLegalIntelligence } from '../lib/ai/extractTenancy';
 import { extractUtilityBill } from '../lib/collections/core';
 import { extractDocumentText } from '../lib/documents/extractText';
 import { maxDocumentPageCount, maxDocumentUploadBytes } from '../lib/documents/types';
@@ -36,12 +37,29 @@ Special clause: Synthetic fixture only.
 const completedOcr = (text: string): OcrProvider => ({ async extractText() { return { status: 'completed', text, error: '' }; } });
 const failedOcr: OcrProvider = { async extractText() { return { status: 'failed', text: '', error: 'synthetic-unreadable' }; } };
 
-test('extracts the required tenancy agreement fields without inventing missing values', () => {
-  const extraction = extractTenancyDetails(syntheticAgreement, 'synthetic-agreement.pdf', 'application/pdf');
+const structuredAgreement: TenancyLegalIntelligence = {
+  document_type: 'Residential', confidence: 0.96,
+  tenant: { name: 'Synthetic Tenant', company: '', ic_passport: 'A1234567', phone: '+60120000002', email: '' },
+  landlord: { name: 'Synthetic Landlord', company: '', ic_passport: '', phone: '+60120000001', email: '' },
+  property: { name: 'Synthetic Residence', unit: '8', address: 'Unit 8, Synthetic Residence, Kuala Lumpur', type: 'Residential', build_up: '', land_area: '', car_parks: '' },
+  financial: { monthly_rental: 2500, security_deposit: 5000, utility_deposit: 1000, access_card_deposit: 200, car_park_deposit: 100, stamp_duty: 0 },
+  tenancy: { commencement_date: '2026-07-01', expiry_date: '2027-06-30', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
+  utilities: { tnb: '', water: '', iwk: '', wifi: '' },
+  special_clauses: ['Synthetic fixture only.'], risks: [], warnings: []
+};
+
+const structuredResponse = async () => new Response(JSON.stringify({
+  output: [{ content: [{ type: 'output_text', text: JSON.stringify(structuredAgreement) }] }]
+}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+test('extracts the required tenancy agreement fields without inventing missing values', async () => {
+  const extraction = await extractTenancyDetails(syntheticAgreement, 'synthetic-agreement.pdf', 'application/pdf', {
+    apiKey: 'synthetic-key', fetcher: structuredResponse
+  });
   assert.equal(extraction.landlord.name.value, 'Synthetic Landlord');
   assert.equal(extraction.tenant.idNo.value, 'A1234567');
-  assert.equal(extraction.financial.monthlyRental.value, '2500.00');
-  assert.equal(extraction.financial.carParkRemoteDeposit.value, '100.00');
+  assert.equal(extraction.financial.monthlyRental.value, '2500');
+  assert.equal(extraction.financial.carParkRemoteDeposit.value, '100');
   assert.equal(extraction.dates.rentalDueDay.value, '1');
   assert.equal(extraction.landlord.email.value, '');
   assert.equal(extraction.landlord.email.confidence, 'low');
@@ -91,7 +109,7 @@ test('enforces file signatures, extensions, size, page and duplicate foundations
   assert.equal(validateExtensionMatchesMime('bill.png', 'image/png'), true);
   assert.equal(validateExtensionMatchesMime('bill.pdf', 'image/png'), false);
   assert.equal(maxDocumentUploadBytes, 10 * 1024 * 1024);
-  assert.equal(maxDocumentPageCount, 25);
+  assert.equal(maxDocumentPageCount, 100);
   assert.equal(createHash('sha256').update(png).digest('hex'), createHash('sha256').update(Buffer.from(png)).digest('hex'));
 });
 

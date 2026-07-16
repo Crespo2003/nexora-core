@@ -38,10 +38,10 @@ test('live OCR verifies synthetic scanned tenancy and utility fixtures', { skip:
     assert.equal(agreementOcr.status, 'completed');
     assert.equal(utilityOcr.status, 'completed');
 
-    const tenancy = extractTenancyDetails(agreementOcr.text, 'synthetic-tenancy.png', 'image/png');
+    const tenancy = await extractTenancyDetails(agreementOcr.text, 'synthetic-tenancy.png', 'image/png');
     const bill = extractUtilityBill(utilityOcr.text, 'synthetic-utility.png');
     assert.match(tenancy.tenant.name.value, /Aisha Rahman/i);
-    assert.equal(tenancy.financial.monthlyRental.value, '2500.00');
+    assert.equal(tenancy.financial.monthlyRental.value, '2500');
     assert.equal(tenancy.tenant.email.value, '');
     assert.equal(tenancy.tenant.email.confidence, 'low');
     assert.ok(['high', 'medium', 'low'].includes(tenancy.tenant.name.confidence));

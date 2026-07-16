@@ -6,6 +6,8 @@ import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../../lib/s
 
 const maxAttempts = 3;
 
+export const maxDuration = 300;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   let supabase: any;
   let workspaceId = '';
@@ -34,7 +36,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const textResult = await extractDocumentText({ buffer, mimeType: document.data.mime_type, filename: document.data.original_filename });
     const success = textResult.status === 'completed' && Boolean(textResult.text.trim());
     const extractedJson = document.data.document_type === 'tenancy_agreement' && success
-      ? extractTenancyDetails(textResult.text, document.data.original_filename, document.data.mime_type)
+      ? await extractTenancyDetails(textResult.text, document.data.original_filename, document.data.mime_type)
       : document.data.document_type === 'utility_bill' && success
         ? extractUtilityBill(textResult.text, document.data.original_filename)
         : {};
@@ -48,7 +50,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
       raw_text: textResult.text,
       extracted_json: extractedJson,
       confidence_json: confidenceJson,
-      ai_summary: success ? 'Retry completed. Review and confirm the extracted values.' : 'Retry failed. Manual review is required.',
+      ai_summary: success && document.data.document_type === 'tenancy_agreement'
+        ? (extractedJson as { summary?: string }).summary ?? 'AI legal extraction completed. Review and confirm the values.'
+        : success ? 'Retry completed. Review and confirm the extracted values.' : 'Retry failed. Manual review is required.',
       extraction_status: success ? 'pending_review' : 'extraction_failed',
       extraction_error: textResult.error || null,
       completed_at: new Date().toISOString()
