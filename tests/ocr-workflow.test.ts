@@ -45,7 +45,9 @@ const structuredAgreement: TenancyLegalIntelligence = {
   financial: { monthly_rental: 2500, security_deposit: 5000, utility_deposit: 1000, access_card_deposit: 200, car_park_deposit: 100, stamp_duty: 0 },
   tenancy: { commencement_date: '2026-07-01', expiry_date: '2027-06-30', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
   utilities: { tnb: '', water: '', iwk: '', wifi: '' },
-  special_clauses: ['Synthetic fixture only.'], risks: [], warnings: []
+  legal: { signatures: '', witnesses: '', stamp_duty: '', inventory: '', restrictions: [], late_payment: '', termination: 'Two months notice', viewing_rights: '', insurance: '', maintenance: '', access_card: '', car_park: '' },
+  special_clauses: ['Synthetic fixture only.'], risks: [], warnings: [],
+  field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 }
 };
 
 const structuredResponse = async () => new Response(JSON.stringify({
