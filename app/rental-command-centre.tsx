@@ -475,7 +475,7 @@ function reviewFormFromExtraction(extraction: TenancyExtraction): ImportReviewFo
       extraction.legalIntelligence.property.build_up ? `Build-up: ${extraction.legalIntelligence.property.build_up}` : '',
       extraction.legalIntelligence.property.land_area ? `Land area: ${extraction.legalIntelligence.property.land_area}` : '',
       extraction.legalIntelligence.property.car_parks ? `Car parks: ${extraction.legalIntelligence.property.car_parks}` : '',
-      extraction.legalIntelligence.risks.length ? `Risks:\n- ${extraction.legalIntelligence.risks.join('\n- ')}` : '',
+      extraction.legalIntelligence.risks.length ? `Risks:\n- ${extraction.legalIntelligence.risks.map((risk) => `[${risk.severity.toUpperCase()}] ${risk.reason} Recommendation: ${risk.recommendation}`).join('\n- ')}` : '',
       extraction.legalIntelligence.warnings.length ? `Warnings:\n- ${extraction.legalIntelligence.warnings.join('\n- ')}` : ''
     ].filter(Boolean).join('\n\n'),
     rawText: extraction.rawText,

@@ -1,5 +1,6 @@
 import type { OcrProvider } from '../ocr/ocrProvider';
 import { extractDocumentText } from '../documents/extractText';
+import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 
 export type LegalParty = {
   name: string;
@@ -8,6 +9,17 @@ export type LegalParty = {
   phone: string;
   email: string;
 };
+
+export type LegalRiskSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type LegalRisk = {
+  code: string;
+  severity: LegalRiskSeverity;
+  reason: string;
+  recommendation: string;
+};
+
+export type FieldConfidence = Record<string, number>;
 
 export type TenancyLegalIntelligence = {
   document_type: string;
@@ -44,9 +56,24 @@ export type TenancyLegalIntelligence = {
     iwk: string;
     wifi: string;
   };
+  legal: {
+    signatures: string;
+    witnesses: string;
+    stamp_duty: string;
+    inventory: string;
+    restrictions: string[];
+    late_payment: string;
+    termination: string;
+    viewing_rights: string;
+    insurance: string;
+    maintenance: string;
+    access_card: string;
+    car_park: string;
+  };
   special_clauses: string[];
-  risks: string[];
+  risks: LegalRisk[];
   warnings: string[];
+  field_confidence: FieldConfidence;
 };
 
 export type TenancyDocumentInput = {
@@ -65,12 +92,6 @@ export type TenancyProcessingResult = {
   model: string;
 };
 
-type ResponsesPayload = {
-  output_text?: string;
-  output?: Array<{ content?: Array<{ text?: string; type?: string; refusal?: string }> }>;
-  error?: { message?: string };
-};
-
 type ExtractTenancyOptions = {
   apiKey?: string;
   model?: string;
@@ -80,6 +101,17 @@ type ExtractTenancyOptions = {
 };
 
 const stringSchema = { type: 'string' } as const;
+const confidencePaths = [
+  'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.phone', 'tenant.email',
+  'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.phone', 'landlord.email',
+  'property.name', 'property.unit', 'property.address', 'property.type', 'property.build_up', 'property.land_area', 'property.car_parks',
+  'financial.monthly_rental', 'financial.security_deposit', 'financial.utility_deposit', 'financial.access_card_deposit', 'financial.car_park_deposit', 'financial.stamp_duty',
+  'tenancy.commencement_date', 'tenancy.expiry_date', 'tenancy.renewal_option', 'tenancy.notice_period', 'tenancy.payment_due_day',
+  'utilities.tnb', 'utilities.water', 'utilities.iwk', 'utilities.wifi',
+  'legal.signatures', 'legal.witnesses', 'legal.stamp_duty', 'legal.inventory', 'legal.restrictions', 'legal.late_payment',
+  'legal.termination', 'legal.viewing_rights', 'legal.insurance', 'legal.maintenance', 'legal.access_card', 'legal.car_park',
+  'special_clauses'
+] as const;
 const partySchema = {
   type: 'object',
   additionalProperties: false,
@@ -92,13 +124,24 @@ const partySchema = {
     email: stringSchema
   }
 } as const;
+const legalRiskSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['code', 'severity', 'reason', 'recommendation'],
+  properties: {
+    code: stringSchema,
+    severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+    reason: stringSchema,
+    recommendation: stringSchema
+  }
+} as const;
 
 export const tenancyLegalIntelligenceSchema = {
   type: 'object',
   additionalProperties: false,
   required: [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'special_clauses', 'risks', 'warnings'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence'
   ],
   properties: {
     document_type: stringSchema,
@@ -138,9 +181,26 @@ export const tenancyLegalIntelligenceSchema = {
       required: ['tnb', 'water', 'iwk', 'wifi'],
       properties: { tnb: stringSchema, water: stringSchema, iwk: stringSchema, wifi: stringSchema }
     },
+    legal: {
+      type: 'object', additionalProperties: false,
+      required: ['signatures', 'witnesses', 'stamp_duty', 'inventory', 'restrictions', 'late_payment', 'termination', 'viewing_rights', 'insurance', 'maintenance', 'access_card', 'car_park'],
+      properties: {
+        signatures: stringSchema, witnesses: stringSchema, stamp_duty: stringSchema,
+        inventory: stringSchema, restrictions: { type: 'array', items: stringSchema },
+        late_payment: stringSchema, termination: stringSchema, viewing_rights: stringSchema,
+        insurance: stringSchema, maintenance: stringSchema, access_card: stringSchema, car_park: stringSchema
+      }
+    },
     special_clauses: { type: 'array', items: stringSchema },
-    risks: { type: 'array', items: stringSchema },
-    warnings: { type: 'array', items: stringSchema }
+    risks: { type: 'array', items: legalRiskSchema },
+    warnings: { type: 'array', items: stringSchema },
+    field_confidence: {
+      type: 'object',
+      description: 'Confidence percentage from 0 to 100 for every scalar or array field, keyed by dot path.',
+      additionalProperties: false,
+      required: confidencePaths,
+      properties: Object.fromEntries(confidencePaths.map((path) => [path, { type: 'number', minimum: 0, maximum: 100 }]))
+    }
   }
 } as const;
 
@@ -152,7 +212,10 @@ Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM 
 Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is absent or ambiguous.
 Use empty strings, zero, and empty arrays for facts that are not stated.
 Preserve material special clauses as concise complete statements.
-Identify legal and operational risks, including missing witnesses, missing stamp duty evidence, conflicting rental amounts, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing landlord details, and missing tenant details.
+Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
+Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
+Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
+Populate field_confidence with a 0-100 percentage for every extracted scalar and array field using its dot path, for example tenant.name, financial.monthly_rental, legal.witnesses and special_clauses. Use 0 for absent fields.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
 Return only the requested JSON schema.`;
@@ -199,7 +262,7 @@ export async function extractTenancyText(
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new TenancyExtractionError('openai-not-configured');
 
-  const model = options.model ?? process.env.OPENAI_TENANCY_MODEL ?? 'gpt-5.4';
+  const model = options.model ?? process.env.OPENAI_TENANCY_MODEL ?? 'gpt-5.5';
   const chunks = splitTenancyDocument(normalizedText, options.maxChunkCharacters);
   const partials: TenancyLegalIntelligence[] = [];
 
@@ -263,38 +326,44 @@ export function applyRiskEngine(
   const risks = [...extraction.risks];
   const warnings = [...extraction.warnings];
 
-  if (!/\bwitness(?:es|ed)?\b|in the presence of|saksi/.test(text)) risks.push('Missing witness or witnessing provision.');
+  if (!/\bsignature(?:s|d)?\b|signed by|execution|ditandatangani/.test(text)) addRisk(risks, 'missing_signatures', 'high', 'No signature or execution wording was detected.', 'Confirm that every required party has signed the final agreement.');
+  if (!/\bwitness(?:es|ed)?\b|in the presence of|saksi/.test(text)) addRisk(risks, 'missing_witness', 'high', 'No witness or witnessing provision was detected.', 'Arrange witnessing and record each witness name and signature where required.');
   if (!/stamp duty|stamping|duly stamped|hasil|lhdn|setem/.test(text) && extraction.financial.stamp_duty === 0) {
-    risks.push('Missing stamp duty amount or evidence of stamping.');
+    addRisk(risks, 'missing_stamp_duty', 'high', 'No stamp duty amount or evidence of stamping was detected.', 'Verify assessment and stamping with LHDN before relying on the agreement.');
   }
-  if (!/renew|renewal|pembaharuan/.test(text) && !extraction.tenancy.renewal_option) risks.push('No renewal clause detected.');
-  if (!/inspect|inspection|viewing|memeriksa|pemeriksaan/.test(text)) risks.push('No inspection or viewing clause detected.');
-  if (!/terminat|termination|determin|penamatan/.test(text)) risks.push('No termination clause detected.');
-  if (!hasPartyDetails(extraction.landlord)) risks.push('Missing landlord details.');
-  if (!hasPartyDetails(extraction.tenant)) risks.push('Missing tenant details.');
+  if (!/renew|renewal|pembaharuan/.test(text) && !extraction.tenancy.renewal_option) addRisk(risks, 'missing_renewal_clause', 'medium', 'No renewal option or renewal clause was detected.', 'Confirm whether renewal is intentionally excluded or document the agreed renewal process.');
+  if (!/inspect|inspection|viewing|memeriksa|pemeriksaan/.test(text)) addRisk(risks, 'missing_inspection_clause', 'medium', 'No inspection or viewing clause was detected.', 'Add reasonable notice, access, and inspection conditions.');
+  if (!/terminat|termination|determin|penamatan/.test(text)) addRisk(risks, 'missing_termination_clause', 'high', 'No termination clause was detected.', 'Add clear termination events, notice periods, remedies, and handover obligations.');
+  if (!extraction.landlord.ic_passport) addRisk(risks, 'missing_landlord_ic', 'high', 'The landlord IC, passport, or company registration number is missing.', 'Verify and record the landlord identity before execution.');
+  if (!extraction.tenant.ic_passport) addRisk(risks, 'missing_tenant_ic', 'high', 'The tenant IC, passport, or company registration number is missing.', 'Verify and record the tenant identity before execution.');
+  if (!hasPartyDetails(extraction.landlord)) addRisk(risks, 'missing_landlord_details', 'high', 'Material landlord identity or contact details are missing.', 'Complete and verify the landlord particulars.');
+  if (!hasPartyDetails(extraction.tenant)) addRisk(risks, 'missing_tenant_details', 'high', 'Material tenant identity or contact details are missing.', 'Complete and verify the tenant particulars.');
+  if (!/inventory|schedule of contents|fixtures and fittings|senarai inventori/.test(text)) addRisk(risks, 'missing_inventory', 'medium', 'No inventory or schedule of contents was detected.', 'Attach a signed inventory with condition evidence for furnished premises.');
+  if (!/maintain|maintenance|repair|upkeep|penyelenggaraan|pembaikan/.test(text)) addRisk(risks, 'missing_maintenance_clause', 'medium', 'No maintenance or repair allocation was detected.', 'Define landlord and tenant maintenance responsibilities and approval thresholds.');
 
   const rentalValues = extractRentalAmounts(rawText);
-  if (new Set(rentalValues.map((value) => value.toFixed(2))).size > 1) risks.push('Conflicting monthly rental amounts detected; verify the operative rental clause.');
+  if (new Set(rentalValues.map((value) => value.toFixed(2))).size > 1) addRisk(risks, 'rental_inconsistency', 'high', 'Conflicting monthly rental amounts were detected.', 'Verify the operative rental amount across the body, schedules, and payment clauses.');
 
   const expectedSecurityMonths = extractDepositMonths(rawText, 'security');
   if (expectedSecurityMonths !== null && extraction.financial.monthly_rental > 0) {
     const expected = extraction.financial.monthly_rental * expectedSecurityMonths;
-    if (Math.abs(expected - extraction.financial.security_deposit) > 1) risks.push('Security deposit amount does not match the stated rental-month multiple.');
+    if (Math.abs(expected - extraction.financial.security_deposit) > 1) addRisk(risks, 'security_deposit_mismatch', 'high', 'The security deposit amount does not match the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount before signing.');
   }
   const expectedUtilityMonths = extractDepositMonths(rawText, 'utilit');
   if (expectedUtilityMonths !== null && extraction.financial.monthly_rental > 0) {
     const expected = extraction.financial.monthly_rental * expectedUtilityMonths;
-    if (Math.abs(expected - extraction.financial.utility_deposit) > 1) risks.push('Utility deposit amount does not match the stated rental-month multiple.');
+    if (Math.abs(expected - extraction.financial.utility_deposit) > 1) addRisk(risks, 'utility_deposit_mismatch', 'high', 'The utility deposit amount does not match the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount before signing.');
   }
 
   if (/evict.{0,80}without (?:a )?court|enter.{0,80}without (?:prior )?notice|forfeit.{0,80}without notice|waive.{0,80}(?:legal|statutory) rights?/.test(text)) {
-    risks.push('Potentially unlawful or unenforceable clause detected; obtain Malaysian legal review.');
+    addRisk(risks, 'potentially_illegal_clause', 'critical', 'A potentially unlawful or unenforceable clause may permit self-help eviction, unannounced entry, automatic forfeiture, or waiver of statutory rights.', 'Obtain Malaysian legal advice and revise the clause before relying on it.');
   }
+  if (hasConflictingDates(extraction, rawText)) addRisk(risks, 'conflicting_dates', 'high', 'Conflicting or chronologically invalid tenancy dates were detected.', 'Reconcile commencement, term, and expiry dates throughout the agreement.');
   if (!extraction.tenancy.commencement_date) warnings.push('Commencement date was not reliably detected.');
   if (!extraction.tenancy.expiry_date) warnings.push('Expiry date was not reliably detected.');
   if (extraction.confidence < 0.75) warnings.push('Overall extraction confidence is below 75%; verify against the source document.');
 
-  return { ...extraction, risks: uniqueStrings(risks), warnings: uniqueStrings(warnings) };
+  return { ...extraction, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
 }
 
 export function createTenancySummary(extraction: TenancyLegalIntelligence): string {
@@ -319,59 +388,29 @@ async function requestStructuredExtraction(input: {
   prompt: string;
   fetcher?: typeof fetch;
 }): Promise<TenancyLegalIntelligence> {
-  const fetcher = input.fetcher ?? fetch;
-  let response: Response;
   try {
-    response = await fetcher('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: input.model,
-        store: false,
-        input: [
-          { role: 'system', content: [{ type: 'input_text', text: extractionInstructions }] },
-          { role: 'user', content: [{ type: 'input_text', text: input.prompt }] }
-        ],
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'malaysian_tenancy_legal_intelligence',
-            strict: true,
-            schema: tenancyLegalIntelligenceSchema
-          }
-        },
-        max_output_tokens: 8_000
-      }),
-      signal: AbortSignal.timeout(120_000)
+    return await requestStructuredOpenAi({
+      apiKey: input.apiKey,
+      model: input.model,
+      fetcher: input.fetcher,
+      schemaName: 'malaysian_tenancy_legal_intelligence',
+      schema: tenancyLegalIntelligenceSchema,
+      system: extractionInstructions,
+      prompt: input.prompt,
+      maxOutputTokens: 12_000,
+      maxAttempts: 3,
+      validate: validateExtractionShape
     });
   } catch (error) {
-    const timeout = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
-    throw new TenancyExtractionError(timeout ? 'openai-timeout' : 'openai-request-failed');
-  }
-
-  const payload = await response.json() as ResponsesPayload;
-  if (!response.ok) throw new TenancyExtractionError(`openai-response-${response.status}`);
-  const refusal = (payload.output ?? []).flatMap((item) => item.content ?? []).find((item) => item.refusal)?.refusal;
-  if (refusal) throw new TenancyExtractionError('openai-refused-extraction');
-  const outputText = payload.output_text ?? (payload.output ?? [])
-    .flatMap((item) => item.content ?? [])
-    .filter((item) => item.type === 'output_text' || Boolean(item.text))
-    .map((item) => item.text ?? '')
-    .join('')
-    .trim();
-  if (!outputText) throw new TenancyExtractionError('openai-empty-extraction');
-
-  try {
-    return validateExtractionShape(JSON.parse(outputText));
-  } catch {
-    throw new TenancyExtractionError('openai-invalid-extraction');
+    if (error instanceof OpenAiClientError) throw new TenancyExtractionError(error.code);
+    throw error;
   }
 }
 
 function validateExtractionShape(value: unknown): TenancyLegalIntelligence {
   if (!value || typeof value !== 'object') throw new Error('invalid-object');
   const candidate = value as Partial<TenancyLegalIntelligence>;
-  if (!candidate.tenant || !candidate.landlord || !candidate.property || !candidate.financial || !candidate.tenancy || !candidate.utilities) {
+  if (!candidate.tenant || !candidate.landlord || !candidate.property || !candidate.financial || !candidate.tenancy || !candidate.utilities || !candidate.legal) {
     throw new Error('missing-required-sections');
   }
   return candidate as TenancyLegalIntelligence;
@@ -384,8 +423,8 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
   };
   const party = (value: Partial<LegalParty> | undefined): LegalParty => ({
-    name: text(value?.name), company: text(value?.company), ic_passport: text(value?.ic_passport),
-    phone: text(value?.phone), email: text(value?.email)
+    name: text(value?.name), company: text(value?.company), ic_passport: text(value?.ic_passport).replace(/\s+/g, ''),
+    phone: normalizeMalaysianPhone(text(value?.phone)), email: normalizeEmail(text(value?.email))
   });
   return {
     document_type: text(source.document_type),
@@ -412,10 +451,78 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
       tnb: text(source.utilities?.tnb), water: text(source.utilities?.water),
       iwk: text(source.utilities?.iwk), wifi: text(source.utilities?.wifi)
     },
+    legal: {
+      signatures: text(source.legal?.signatures), witnesses: text(source.legal?.witnesses),
+      stamp_duty: text(source.legal?.stamp_duty), inventory: text(source.legal?.inventory),
+      restrictions: uniqueStrings(source.legal?.restrictions ?? []),
+      late_payment: text(source.legal?.late_payment), termination: text(source.legal?.termination),
+      viewing_rights: text(source.legal?.viewing_rights), insurance: text(source.legal?.insurance),
+      maintenance: text(source.legal?.maintenance), access_card: text(source.legal?.access_card),
+      car_park: text(source.legal?.car_park)
+    },
     special_clauses: uniqueStrings(source.special_clauses ?? []),
-    risks: uniqueStrings(source.risks ?? []),
-    warnings: uniqueStrings(source.warnings ?? [])
+    risks: uniqueRisks(source.risks ?? []),
+    warnings: uniqueStrings(source.warnings ?? []),
+    field_confidence: normalizeFieldConfidence(source.field_confidence, source)
   };
+}
+
+function normalizeMalaysianPhone(value: string): string {
+  if (!value) return '';
+  const digits = value.replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '');
+  if (/^\+60\d{8,10}$/.test(digits)) return digits;
+  if (/^60\d{8,10}$/.test(digits)) return `+${digits}`;
+  if (/^0\d{8,10}$/.test(digits)) return `+60${digits.slice(1)}`;
+  return digits;
+}
+
+function normalizeEmail(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+}
+
+function normalizeFieldConfidence(value: FieldConfidence | undefined, source: TenancyLegalIntelligence): FieldConfidence {
+  const result: FieldConfidence = {};
+  for (const path of confidencePaths) {
+    const supplied = Number(value?.[path]);
+    result[path] = Number.isFinite(supplied) ? Math.round(Math.min(100, Math.max(0, supplied))) : hasPathValue(source, path) ? 50 : 0;
+  }
+  return result;
+}
+
+function hasPathValue(source: TenancyLegalIntelligence, path: string): boolean {
+  let current: unknown = source;
+  for (const segment of path.split('.')) {
+    if (!current || typeof current !== 'object') return false;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return Array.isArray(current) ? current.length > 0 : typeof current === 'number' ? current > 0 : Boolean(current);
+}
+
+function addRisk(risks: LegalRisk[], code: string, severity: LegalRiskSeverity, reason: string, recommendation: string): void {
+  risks.push({ code, severity, reason, recommendation });
+}
+
+function uniqueRisks(values: unknown[]): LegalRisk[] {
+  const seen = new Set<string>();
+  const result: LegalRisk[] = [];
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const candidate = value as Partial<LegalRisk>;
+    const code = String(candidate.code ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const reason = String(candidate.reason ?? '').replace(/\s+/g, ' ').trim();
+    if (!code || !reason || seen.has(code)) continue;
+    seen.add(code);
+    const severity = ['low', 'medium', 'high', 'critical'].includes(String(candidate.severity))
+      ? candidate.severity as LegalRiskSeverity : 'medium';
+    result.push({
+      code,
+      severity,
+      reason,
+      recommendation: String(candidate.recommendation ?? 'Review this issue against the signed agreement.').replace(/\s+/g, ' ').trim()
+    });
+  }
+  return result;
 }
 
 function normalizeDocumentText(rawText: string): string {
@@ -513,6 +620,14 @@ function extractDepositMonths(text: string, kind: 'security' | 'utilit'): number
   const pattern = new RegExp(`${kind}[\\s\\S]{0,100}?(\\d+(?:\\.\\d+)?)\\s*months?`, 'i');
   const match = text.match(pattern);
   return match ? Number(match[1]) : null;
+}
+
+function hasConflictingDates(extraction: TenancyLegalIntelligence, rawText: string): boolean {
+  const { commencement_date: start, expiry_date: end } = extraction.tenancy;
+  if (start && end && new Date(`${end}T00:00:00Z`) <= new Date(`${start}T00:00:00Z`)) return true;
+  const labelled = [...rawText.matchAll(/(?:commencement|start|expiry|expiration|end)\s+date\s*[:\-]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{4})/gi)]
+    .map((match) => normalizeDate(match[1])).filter(Boolean);
+  return new Set(labelled).size > 2;
 }
 
 function formatMoney(value: number): string {

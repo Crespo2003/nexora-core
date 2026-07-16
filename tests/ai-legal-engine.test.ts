@@ -9,6 +9,7 @@ import {
   tenancyLegalIntelligenceSchema,
   type TenancyLegalIntelligence
 } from '../lib/ai/extractTenancy';
+import { extractTenancyDetails } from '../lib/tenancy/parser';
 
 const propertyTypes = [
   'Residential', 'Commercial', 'Industrial', 'Office', 'Retail',
@@ -37,7 +38,7 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'special_clauses', 'risks', 'warnings'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);
 });
@@ -61,7 +62,7 @@ test('risk engine detects the required Malaysian tenancy review risks', () => {
   });
   const text = 'Monthly rental RM 3,000. Another schedule states monthly rental RM 3,500. Security deposit is 2 months rental. Landlord may enter without prior notice and evict without court process.';
   const result = applyRiskEngine(source, text);
-  const risks = result.risks.join(' ').toLowerCase();
+  const risks = result.risks.map((risk) => `${risk.code} ${risk.reason}`).join(' ').toLowerCase();
   assert.match(risks, /witness/);
   assert.match(risks, /stamp duty/);
   assert.match(risks, /conflicting monthly rental/);
@@ -70,8 +71,8 @@ test('risk engine detects the required Malaysian tenancy review risks', () => {
   assert.match(risks, /inspection/);
   assert.match(risks, /termination/);
   assert.match(risks, /deposit amount/);
-  assert.match(risks, /landlord details/);
-  assert.match(risks, /tenant details/);
+  assert.match(risks, /landlord.*details/);
+  assert.match(risks, /tenant.*details/);
 });
 
 test('evaluates 20 Malaysian agreement variants above the 95 percent extraction target', async () => {
@@ -120,7 +121,10 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
     document_type: 'Residential',
     financial: { monthly_rental: 3500, security_deposit: 7000, utility_deposit: 1750, access_card_deposit: 0, car_park_deposit: 0, stamp_duty: 0 },
     tenancy: { commencement_date: '2026-07-01', expiry_date: '2028-06-30', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
-    risks: ['Risk one', 'Risk two']
+    risks: [
+      { code: 'risk_one', severity: 'medium', reason: 'Risk one', recommendation: 'Review one' },
+      { code: 'risk_two', severity: 'high', reason: 'Risk two', recommendation: 'Review two' }
+    ]
   });
   const summary = createTenancySummary(extraction);
   assert.match(summary, /2-year residential tenancy/i);
@@ -129,6 +133,43 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
   assert.match(summary, /RM1,750 utility deposit/);
   assert.match(summary, /Renewal option available/);
   assert.match(summary, /2 legal risks detected/);
+});
+
+test('GPT client retries transient failures and preserves field-level confidence', async () => {
+  let calls = 0;
+  const expected = baseExtraction({ field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 } });
+  const fetcher: typeof fetch = async () => {
+    calls += 1;
+    return calls < 3 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
+  };
+  const result = await extractTenancyText(`${'Complete Malaysian tenancy agreement. '.repeat(8)} Tenant: Tenant`, 'retry.pdf', {
+    apiKey: 'retry-key', model: 'gpt-5.5', fetcher
+  });
+  assert.equal(calls, 3);
+  assert.equal(result.extraction.field_confidence['tenant.name'], 98);
+  assert.equal(result.extraction.field_confidence['tenancy.renewal_option'], 65);
+  assert.ok(Object.keys(result.extraction.field_confidence).length >= 40);
+});
+
+test('deterministic parser remains available when OpenAI cannot extract', async () => {
+  const rawText = `TENANCY AGREEMENT\nTenant: Fallback Tenant\nLandlord: Fallback Landlord\nProperty: Fallback Residence\nMonthly rental: RM 2,500\nSecurity deposit: RM 5,000\nCommencement date: 01/07/2026\nExpiry date: 30/06/2027\nTermination: Two months notice. ${'Agreement terms. '.repeat(8)}`;
+  const extraction = await extractTenancyDetails(rawText, 'fallback.txt', 'text/plain', {
+    apiKey: 'invalid', fetcher: async () => new Response('{}', { status: 401 })
+  });
+  assert.equal(extraction.advancedAiConfigured, false);
+  assert.equal(extraction.document.model, 'deterministic-fallback');
+  assert.equal(extraction.tenant.name.value, 'Fallback Tenant');
+  assert.equal(extraction.financial.monthlyRental.value, '2500');
+});
+
+test('Sprint 010 stores structured risks and field confidence without replacing raw extraction JSON', () => {
+  const migration = readFileSync('supabase/migrations/202607170001_sprint_010_ai_legal_intelligence.sql', 'utf8');
+  assert.match(migration, /add column if not exists risk_analysis jsonb/i);
+  assert.match(migration, /add column if not exists field_confidence jsonb/i);
+  assert.match(migration, /new\.risk_analysis := coalesce\(new\.extracted_json -> 'risks'/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /set search_path = ''/i);
+  assert.match(migration, /revoke all on function public\.sprint_010_populate_legal_intelligence_columns\(\) from public, anon, authenticated/i);
 });
 
 test('Sprint 009 persistence is atomic, workspace-scoped, and writes every required record', () => {
@@ -155,7 +196,9 @@ function baseExtraction(overrides: Partial<TenancyLegalIntelligence> = {}): Tena
     property: { name: 'Premises', unit: '1', address: 'Kuala Lumpur', type: 'Residential', build_up: '', land_area: '', car_parks: '' },
     financial: { monthly_rental: 2000, security_deposit: 4000, utility_deposit: 1000, access_card_deposit: 0, car_park_deposit: 0, stamp_duty: 100 },
     tenancy: { commencement_date: '2026-01-01', expiry_date: '2027-01-01', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
-    utilities: { tnb: '', water: '', iwk: '', wifi: '' }, special_clauses: [], risks: [], warnings: []
+    utilities: { tnb: '', water: '', iwk: '', wifi: '' },
+    legal: { signatures: 'Signed', witnesses: 'Witness One', stamp_duty: 'RM100', inventory: 'Attached', restrictions: [], late_payment: '', termination: 'Two months notice', viewing_rights: 'Prior notice', insurance: '', maintenance: 'Tenant minor repairs', access_card: '', car_park: '' },
+    special_clauses: [], risks: [], warnings: [], field_confidence: {}
   };
   return {
     ...base,
@@ -166,9 +209,11 @@ function baseExtraction(overrides: Partial<TenancyLegalIntelligence> = {}): Tena
     financial: overrides.financial ?? base.financial,
     tenancy: overrides.tenancy ?? base.tenancy,
     utilities: overrides.utilities ?? base.utilities,
+    legal: overrides.legal ?? base.legal,
     special_clauses: overrides.special_clauses ?? base.special_clauses,
     risks: overrides.risks ?? base.risks,
-    warnings: overrides.warnings ?? base.warnings
+    warnings: overrides.warnings ?? base.warnings,
+    field_confidence: overrides.field_confidence ?? base.field_confidence
   };
 }
 

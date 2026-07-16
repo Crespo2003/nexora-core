@@ -1,11 +1,12 @@
 import { isoToDisplayDate } from '../dates/formatDate';
+import { extractDocumentText } from '../documents/extractText';
 import {
-  extractTenancyDocument,
   extractTenancyText,
   type TenancyDocumentInput,
   type TenancyLegalIntelligence,
   type TenancyProcessingResult
 } from '../ai/extractTenancy';
+import { extractTenancyDeterministically } from './deterministicParser';
 
 export type Confidence = 'high' | 'medium' | 'low';
 
@@ -68,10 +69,11 @@ export type TenancyExtraction = {
     pageCount: number | null;
     chunkCount: number;
     model: string;
+    fallbackReason?: string;
   };
   rawText: string;
   summary: string;
-  advancedAiConfigured: true;
+  advancedAiConfigured: boolean;
   legalIntelligence: TenancyLegalIntelligence;
 };
 
@@ -83,16 +85,29 @@ export async function extractTenancyDetails(
   mimeType: string,
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
-  const result = await extractTenancyText(rawText, originalFilename, options);
-  return toLegacyExtraction({ ...result, pageCount: null, usedOcr: false }, originalFilename, mimeType);
+  try {
+    const result = await extractTenancyText(rawText, originalFilename, options);
+    return toLegacyExtraction({ ...result, pageCount: null, usedOcr: false }, originalFilename, mimeType);
+  } catch (error) {
+    return extractTenancyDeterministically(rawText, originalFilename, mimeType, extractionErrorCode(error));
+  }
 }
 
 export async function extractTenancyFile(
   input: TenancyDocumentInput,
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
-  const result = await extractTenancyDocument(input, options);
-  return toLegacyExtraction(result, input.filename, input.mimeType);
+  const text = await extractDocumentText(input, options.ocrProvider);
+  if (text.status !== 'completed' || !text.text.trim()) throw new Error(text.error || 'document-text-extraction-failed');
+  try {
+    const result = await extractTenancyText(text.text, input.filename, options);
+    return toLegacyExtraction({ ...result, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
+  } catch (error) {
+    const fallback = extractTenancyDeterministically(text.text, input.filename, input.mimeType, extractionErrorCode(error));
+    fallback.document.usedOcr = text.usedOcr;
+    fallback.document.pageCount = text.pageCount;
+    return fallback;
+  }
 }
 
 function toLegacyExtraction(
@@ -102,9 +117,9 @@ function toLegacyExtraction(
 ): TenancyExtraction {
   const legal = result.extraction;
   const confidence = confidenceLevel(legal.confidence);
-  const field = (value: string | number, missingConfidence: Confidence = 'low'): ExtractedField => ({
+  const field = (value: string | number, path: string, missingConfidence: Confidence = 'low'): ExtractedField => ({
     value: String(value ?? ''),
-    confidence: String(value ?? '').trim() ? confidence : missingConfidence
+    confidence: String(value ?? '').trim() ? confidenceLevel((legal.field_confidence[path] ?? legal.confidence * 100) / 100) : missingConfidence
   });
   const clause = (pattern: RegExp) => legal.special_clauses.find((item) => pattern.test(item)) ?? '';
   const allClauses = legal.special_clauses.join('\n\n');
@@ -112,47 +127,47 @@ function toLegacyExtraction(
 
   return {
     property: {
-      propertyName: field(legal.property.name),
-      unitNo: field(legal.property.unit),
-      fullAddress: field(legal.property.address),
-      propertyType: field(legal.property.type)
+      propertyName: field(legal.property.name, 'property.name'),
+      unitNo: field(legal.property.unit, 'property.unit'),
+      fullAddress: field(legal.property.address, 'property.address'),
+      propertyType: field(legal.property.type, 'property.type')
     },
     landlord: {
-      name: field(legal.landlord.name),
-      idNo: field(legal.landlord.ic_passport),
-      phone: field(legal.landlord.phone),
-      email: field(legal.landlord.email)
+      name: field(legal.landlord.name, 'landlord.name'),
+      idNo: field(legal.landlord.ic_passport, 'landlord.ic_passport'),
+      phone: field(legal.landlord.phone, 'landlord.phone'),
+      email: field(legal.landlord.email, 'landlord.email')
     },
     tenant: {
-      name: field(legal.tenant.name),
-      idNo: field(legal.tenant.ic_passport),
-      phone: field(legal.tenant.phone),
-      email: field(legal.tenant.email)
+      name: field(legal.tenant.name, 'tenant.name'),
+      idNo: field(legal.tenant.ic_passport, 'tenant.ic_passport'),
+      phone: field(legal.tenant.phone, 'tenant.phone'),
+      email: field(legal.tenant.email, 'tenant.email')
     },
     financial: {
-      monthlyRental: field(legal.financial.monthly_rental),
-      securityDeposit: field(legal.financial.security_deposit),
-      utilityDeposit: field(legal.financial.utility_deposit),
-      accessCardDeposit: field(legal.financial.access_card_deposit),
-      carParkRemoteDeposit: field(legal.financial.car_park_deposit)
+      monthlyRental: field(legal.financial.monthly_rental, 'financial.monthly_rental'),
+      securityDeposit: field(legal.financial.security_deposit, 'financial.security_deposit'),
+      utilityDeposit: field(legal.financial.utility_deposit, 'financial.utility_deposit'),
+      accessCardDeposit: field(legal.financial.access_card_deposit, 'financial.access_card_deposit'),
+      carParkRemoteDeposit: field(legal.financial.car_park_deposit, 'financial.car_park_deposit')
     },
     dates: {
-      commencementDate: field(toDisplayDate(legal.tenancy.commencement_date)),
-      expiryDate: field(toDisplayDate(legal.tenancy.expiry_date)),
-      rentalDueDay: field(legal.tenancy.payment_due_day),
-      renewalOption: field(legal.tenancy.renewal_option),
-      noticePeriod: field(legal.tenancy.notice_period),
-      renewalReminder: field(toDisplayDate(renewalReminder))
+      commencementDate: field(toDisplayDate(legal.tenancy.commencement_date), 'tenancy.commencement_date'),
+      expiryDate: field(toDisplayDate(legal.tenancy.expiry_date), 'tenancy.expiry_date'),
+      rentalDueDay: field(legal.tenancy.payment_due_day, 'tenancy.payment_due_day'),
+      renewalOption: field(legal.tenancy.renewal_option, 'tenancy.renewal_option'),
+      noticePeriod: field(legal.tenancy.notice_period, 'tenancy.notice_period'),
+      renewalReminder: field(toDisplayDate(renewalReminder), 'tenancy.renewal_option')
     },
     clauses: {
-      renewalClause: field(clause(/renew/i) || legal.tenancy.renewal_option),
-      terminationClause: field(clause(/terminat|determin/i)),
-      diplomaticClause: field(clause(/diplomatic/i)),
-      viewingClause: field(clause(/view|inspect/i)),
-      illegalActivityRestriction: field(clause(/illegal|unlawful/i)),
-      petClause: field(clause(/pet|animal/i)),
-      specialClauses: field(allClauses),
-      otherObligations: field(clause(/obligation|repair|maintenance/i))
+      renewalClause: field(clause(/renew/i) || legal.tenancy.renewal_option, 'tenancy.renewal_option'),
+      terminationClause: field(legal.legal.termination || clause(/terminat|determin/i), 'legal.termination'),
+      diplomaticClause: field(clause(/diplomatic/i), 'special_clauses'),
+      viewingClause: field(legal.legal.viewing_rights || clause(/view|inspect/i), 'legal.viewing_rights'),
+      illegalActivityRestriction: field(legal.legal.restrictions.join('; ') || clause(/illegal|unlawful/i), 'legal.restrictions'),
+      petClause: field(clause(/pet|animal/i), 'special_clauses'),
+      specialClauses: field(allClauses, 'special_clauses'),
+      otherObligations: field(legal.legal.maintenance || clause(/obligation|repair|maintenance/i), 'legal.maintenance')
     },
     document: {
       originalFilename,
@@ -172,9 +187,13 @@ function toLegacyExtraction(
   };
 }
 
+function extractionErrorCode(error: unknown): string {
+  return error instanceof Error ? error.message : 'advanced-ai-extraction-failed';
+}
+
 function confidenceLevel(value: number): Confidence {
-  if (value >= 0.85) return 'high';
-  if (value >= 0.6) return 'medium';
+  if (value >= 0.8) return 'high';
+  if (value >= 0.5) return 'medium';
   return 'low';
 }
 
