@@ -77,9 +77,10 @@ export const documentTypes: DocumentType[] = [
 export const allowedDocumentMimeTypes = [
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
   'image/jpeg',
   'image/png'
 ];
 
 export const maxDocumentUploadBytes = 10 * 1024 * 1024;
-export const maxDocumentPageCount = 25;
+export const maxDocumentPageCount = 100;

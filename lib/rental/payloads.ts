@@ -3,6 +3,7 @@ export type TenancyPayload = {
   tenant_id_no?: string;
   tenant_phone?: string;
   tenant_email?: string;
+  tenant_company?: string;
   landlord: string;
   landlord_id_no?: string;
   landlord_phone?: string;
@@ -16,6 +17,7 @@ export type TenancyPayload = {
   utility_deposit: number;
   access_card_deposit: number;
   car_park_remote_deposit: number;
+  rental_due_day?: number;
   commencement_date: string | null;
   expiry_date: string | null;
   renewal_option?: string;

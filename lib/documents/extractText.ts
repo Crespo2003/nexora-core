@@ -1,6 +1,7 @@
 import { createOcrProvider } from '../ocr/openAiOcr';
 import type { OcrProvider } from '../ocr/ocrProvider';
 import { maxDocumentPageCount } from './types';
+import { detectScannedDocument } from './detectScannedDocument';
 import { parseDocx } from './parseDocx';
 import { parsePdfDocument } from './parsePdf';
 
@@ -22,11 +23,20 @@ export async function extractDocumentText(
       if (parsed.pageCount > maxDocumentPageCount) {
         return { status: 'failed', text: '', error: 'page-limit-exceeded', pageCount: parsed.pageCount, usedOcr: false };
       }
-      if (parsed.text.trim()) return { status: 'completed', text: parsed.text, error: '', pageCount: parsed.pageCount, usedOcr: false };
+      const scannedPageDetected = parsed.pageTexts.some((pageText) => detectScannedDocument(pageText, input.mimeType).ocrRequired);
+      if (!scannedPageDetected && !detectScannedDocument(parsed.text, input.mimeType).ocrRequired) {
+        return { status: 'completed', text: parsed.text, error: '', pageCount: parsed.pageCount, usedOcr: false };
+      }
     }
     if (input.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
       const text = await parseDocx(input.buffer);
       return text.trim()
+        ? { status: 'completed', text, error: '', pageCount: null, usedOcr: false }
+        : { status: 'failed', text: '', error: 'empty-extraction', pageCount: null, usedOcr: false };
+    }
+    if (input.mimeType === 'text/plain') {
+      const text = input.buffer.toString('utf8').replace(/^\uFEFF/, '').trim();
+      return text
         ? { status: 'completed', text, error: '', pageCount: null, usedOcr: false }
         : { status: 'failed', text: '', error: 'empty-extraction', pageCount: null, usedOcr: false };
     }

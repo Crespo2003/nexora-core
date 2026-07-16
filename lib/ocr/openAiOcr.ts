@@ -13,7 +13,7 @@ export class OpenAiOcrProvider implements OcrProvider {
     const encoded = input.buffer.toString('base64');
     const media = input.mimeType.startsWith('image/')
       ? { type: 'input_image', image_url: `data:${input.mimeType};base64,${encoded}`, detail: 'high' }
-      : { type: 'input_file', filename: input.filename, file_data: encoded };
+      : { type: 'input_file', filename: input.filename, file_data: `data:${input.mimeType};base64,${encoded}`, detail: 'high' };
     try {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
@@ -26,9 +26,10 @@ export class OpenAiOcrProvider implements OcrProvider {
               { type: 'input_text', text: 'Transcribe all visible document text exactly. Preserve line breaks. Return only the transcription.' },
               media
             ]
-          }]
+          }],
+          max_output_tokens: 30_000
         }),
-        signal: AbortSignal.timeout(45_000)
+        signal: AbortSignal.timeout(180_000)
       });
       const payload = await response.json() as ResponsesPayload;
       if (!response.ok) return { status: 'failed', text: '', error: `ocr-provider-${response.status}` };

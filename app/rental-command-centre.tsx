@@ -466,13 +466,18 @@ function reviewFormFromExtraction(extraction: TenancyExtraction): ImportReviewFo
     noticePeriod: fieldValue(extraction, 'dates.noticePeriod'),
     renewalReminder: fieldValue(extraction, 'dates.renewalReminder'),
     signedTa: extraction.document.originalFilename,
-    renewalHistory: fieldValue(extraction, 'clauses.renewalClause'),
-    specialClauses: [
-      fieldValue(extraction, 'clauses.specialClauses'),
-      fieldValue(extraction, 'clauses.terminationClause'),
-      fieldValue(extraction, 'clauses.diplomaticClause')
+    renewalHistory: fieldValue(extraction, 'clauses.renewalClause') || extraction.legalIntelligence.tenancy.renewal_option,
+    specialClauses: extraction.legalIntelligence.special_clauses.join('\n\n'),
+    notes: [
+      extraction.summary,
+      extraction.legalIntelligence.tenant.company ? `Tenant company: ${extraction.legalIntelligence.tenant.company}` : '',
+      extraction.legalIntelligence.landlord.company ? `Landlord company: ${extraction.legalIntelligence.landlord.company}` : '',
+      extraction.legalIntelligence.property.build_up ? `Build-up: ${extraction.legalIntelligence.property.build_up}` : '',
+      extraction.legalIntelligence.property.land_area ? `Land area: ${extraction.legalIntelligence.property.land_area}` : '',
+      extraction.legalIntelligence.property.car_parks ? `Car parks: ${extraction.legalIntelligence.property.car_parks}` : '',
+      extraction.legalIntelligence.risks.length ? `Risks:\n- ${extraction.legalIntelligence.risks.join('\n- ')}` : '',
+      extraction.legalIntelligence.warnings.length ? `Warnings:\n- ${extraction.legalIntelligence.warnings.join('\n- ')}` : ''
     ].filter(Boolean).join('\n\n'),
-    notes: extraction.summary,
     rawText: extraction.rawText,
     summary: extraction.summary
   };
@@ -776,7 +781,7 @@ export default function RentalCommandCentre() {
 
   async function parseImportFile() {
     if (!importFile) return;
-    const validType = importFile.type === 'application/pdf' || importFile.name.toLowerCase().endsWith('.pdf') || importFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || importFile.name.toLowerCase().endsWith('.docx');
+    const validType = importFile.type === 'application/pdf' || importFile.name.toLowerCase().endsWith('.pdf') || importFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || importFile.name.toLowerCase().endsWith('.docx') || importFile.type === 'text/plain' || importFile.name.toLowerCase().endsWith('.txt');
     if (!validType) {
       setNotice({ tone: 'error', message: t.notices.unsupportedFile });
       return;
@@ -842,16 +847,21 @@ export default function RentalCommandCentre() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tenancy: tenancyPayload(reviewForm),
+          tenancy: {
+            ...tenancyPayload(reviewForm),
+            tenant_company: extraction.legalIntelligence.tenant.company,
+            rental_due_day: Number(extraction.legalIntelligence.tenancy.payment_due_day) || 1
+          },
           collection: collectionPayloadWithoutTenancy(localCollection),
           document: uploadedDocument,
           extraction: {
             extractionStatus: extraction.document.extractionStatus,
-            extractedJson: reviewForm,
+            extractedJson: extraction.legalIntelligence,
             rawText: reviewForm.rawText,
             aiSummary: reviewForm.summary,
             confidenceJson: extraction,
-            extractionError: extraction.document.extractionStatus === 'unreadable' ? t.scannedWarning : null
+            extractionError: extraction.document.extractionStatus === 'unreadable' ? t.scannedWarning : null,
+            model: extraction.document.model
           }
         })
       });
@@ -868,6 +878,8 @@ export default function RentalCommandCentre() {
       setTenancies((current) => [savedTenancy, ...current]);
       setCollections((current) => [collection, ...current]);
       setDocuments((current) => [savedDocument, ...current]);
+      setSelectedTenancyId(savedTenancy.id);
+      await loadRentalData();
       setSelectedTenancyId(savedTenancy.id);
       setImportFile(null);
       setExtraction(null);
@@ -947,7 +959,7 @@ export default function RentalCommandCentre() {
                 <input
                   aria-label={t.uploadPdfDocx}
                   type="file"
-                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
                   onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
                 />
                 <h3>{t.dropDocument}</h3>
