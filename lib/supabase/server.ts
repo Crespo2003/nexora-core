@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
+export const ACTIVE_WORKSPACE_COOKIE = 'nexora_active_workspace';
+
 export function getRouteSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -33,6 +35,29 @@ export type AuthContext = {
   workspaceId: string;
   role: WorkspaceRole;
 };
+
+export type WorkspaceMembership = {
+  workspace_id: string;
+  role: WorkspaceRole;
+  status: 'active' | 'invited' | 'disabled' | 'suspended';
+  workspaces: { id: string; name: string; status: string } | null;
+};
+
+export async function getCurrentUserMemberships(supabase = getRouteSupabaseClient()) {
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError || !userResult.user) return { user: null, memberships: [] as WorkspaceMembership[] };
+
+  const result = await supabase
+    .from('workspace_members')
+    .select('workspace_id, role, status, workspaces(id, name, status)')
+    .eq('user_id', userResult.user.id)
+    .order('created_at', { ascending: true });
+  if (result.error) throw result.error;
+  return {
+    user: userResult.user,
+    memberships: (result.data ?? []) as unknown as WorkspaceMembership[]
+  };
+}
 
 export function jsonAuthError(status: 401 | 403 | 404, code: string) {
   return Response.json(
@@ -79,14 +104,14 @@ export async function requireWorkspaceAccess(
 
   if (userError || !user) return jsonAuthError(401, 'authentication-required');
 
-  const membership = await supabase
+  const requestedWorkspaceId = cookies().get(ACTIVE_WORKSPACE_COOKIE)?.value;
+  let membershipQuery = supabase
     .from('workspace_members')
     .select('workspace_id, role, status')
     .eq('user_id', user.id)
-    .eq('status', 'active')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .eq('status', 'active');
+  if (requestedWorkspaceId) membershipQuery = membershipQuery.eq('workspace_id', requestedWorkspaceId);
+  const membership = await membershipQuery.order('created_at', { ascending: true }).limit(1).maybeSingle();
 
   if (membership.error) throw membership.error;
   if (!membership.data) return jsonAuthError(403, 'workspace-required');

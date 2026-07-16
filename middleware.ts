@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const publicRoutes = ['/login', '/forgot-password', '/reset-password', '/setup'];
+const publicRoutes = ['/login', '/signup', '/forgot-password', '/reset-password', '/auth/callback', '/access-denied', '/invitations/accept'];
 
 function isPublicPath(pathname: string) {
   return publicRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
@@ -66,9 +66,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(redirect);
   }
 
-  if (data.user && (pathname === '/login' || pathname === '/forgot-password')) {
+  if (data.user && (pathname === '/login' || pathname === '/signup' || pathname === '/forgot-password')) {
     const redirect = request.nextUrl.clone();
-    redirect.pathname = '/';
+    redirect.pathname = '/auth/route';
     redirect.search = '';
     return NextResponse.redirect(redirect);
   }
@@ -98,6 +98,12 @@ export const config = {
     '/forgot-password',
     '/reset-password',
     '/setup',
+    '/signup',
+    '/auth/:path*',
+    '/onboarding/:path*',
+    '/workspace/:path*',
+    '/access-denied',
+    '/invitations/:path*',
     '/api/:path*'
   ]
 };
