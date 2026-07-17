@@ -8,6 +8,8 @@ import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } fr
 
 const maxUploadBytes = 10 * 1024 * 1024;
 const storageBucket = 'real-estate-documents';
+const reusableExtractionStatuses = ['extraction_completed', 'completed', 'ready'];
+const retryableDocumentStatuses = ['ocr_required', 'extraction_failed'];
 
 type UploadStage = 'auth' | 'upload' | 'validation' | 'storage' | 'pdf' | 'docx' | 'ocr' | 'openai' | 'parser' | 'mapping' | 'database' | 'unknown';
 type UploadDependencies = {
@@ -27,6 +29,74 @@ const defaultDependencies: UploadDependencies = {
   rejectOversizedRequest,
   getOpenAiConfiguration
 };
+
+type ExistingDocument = {
+  id: string;
+  processing_status: string | null;
+  original_filename: string | null;
+  sanitized_filename: string | null;
+  storage_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  document_type: string | null;
+  upload_status: string | null;
+  document_hash: string | null;
+};
+
+type ExistingExtraction = {
+  id: string;
+  raw_text: string | null;
+  extracted_json: unknown;
+  confidence_json: unknown;
+  ai_summary: string | null;
+  ai_model: string | null;
+  extraction_engine: string | null;
+  extraction_status: string | null;
+  created_at: string | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function reusableLegalIntelligence(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const nested = value.legalIntelligence ?? value.legal_intelligence;
+  const legalIntelligence = isRecord(nested) ? nested : value;
+  const hasRecognizedSection = ['tenant', 'landlord', 'property', 'financial', 'tenancy'].some((section) => isRecord(legalIntelligence[section]));
+  return hasRecognizedSection ? legalIntelligence : null;
+}
+
+function storedExtractionForReview(
+  extraction: ExistingExtraction,
+  document: ExistingDocument
+): Awaited<ReturnType<typeof extractTenancyFile>> {
+  const legalIntelligence = reusableLegalIntelligence(extraction.extracted_json);
+  if (!legalIntelligence) throw new Error('stored-extraction-invalid');
+
+  const provider = extraction.extraction_engine === 'openai' ? 'openai' : 'deterministic';
+
+  return {
+    provider,
+    fallbackUsed: provider !== 'openai',
+    fallbackReason: provider === 'openai' ? null : 'stored_extraction',
+    rawText: extraction.raw_text ?? '',
+    summary: extraction.ai_summary ?? '',
+    legalIntelligence,
+    document: {
+      originalFilename: document.original_filename ?? 'tenancy-agreement',
+      uploadDate: extraction.created_at?.slice(0, 10) ?? '',
+      documentType: document.document_type ?? 'tenancy_agreement',
+      extractionStatus: extraction.extraction_status ?? 'extraction_completed',
+      extractionConfidence: 100,
+      usedOcr: false,
+      pageCount: null,
+      chunkCount: 1,
+      model: extraction.ai_model ?? null,
+      fallbackReason: provider === 'openai' ? null : 'stored_extraction'
+    }
+  } as unknown as Awaited<ReturnType<typeof extractTenancyFile>>;
+}
 
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
@@ -88,6 +158,9 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
     const startedAt = Date.now();
     let stage: UploadStage = 'upload';
     let uploadedPath: string | null = null;
+    let storagePath = '';
+    let uploadedStorageReference = '';
+    let existingDocument: ExistingDocument | null = null;
     let supabase: any;
 
     const respond = (status: number, payload: Record<string, unknown>) => {
@@ -196,36 +269,109 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
 
       const documentHash = createHash('sha256').update(buffer).digest('hex');
       stage = 'database';
-      const duplicate = await supabase.from('documents').select('id, processing_status')
+      const duplicate = await supabase.from('documents').select('id, processing_status, original_filename, sanitized_filename, storage_path, mime_type, file_size, document_type, upload_status, document_hash')
         .eq('workspace_id', workspaceId).eq('document_hash', documentHash).maybeSingle();
       if (duplicate.error) throw duplicate.error;
       if (duplicate.data) {
-        return fail(409, 'database', 'duplicate-document', {
-          documentId: duplicate.data.id,
-          retryAllowed: ['ocr_required', 'extraction_failed'].includes(String(duplicate.data.processing_status))
+        existingDocument = duplicate.data as ExistingDocument;
+        const latestExtraction = await supabase.from('document_extractions')
+          .select('id, raw_text, extracted_json, confidence_json, ai_summary, ai_model, extraction_engine, extraction_status, created_at')
+          .eq('workspace_id', workspaceId)
+          .eq('document_id', existingDocument.id)
+          .in('extraction_status', reusableExtractionStatuses)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestExtraction.error) throw latestExtraction.error;
+
+        const reusableLegalData = reusableLegalIntelligence(latestExtraction.data?.extracted_json);
+        if (latestExtraction.data && reusableLegalData) {
+          const existingLink = await supabase.from('document_links')
+            .select('entity_id')
+            .eq('workspace_id', workspaceId)
+            .eq('document_id', existingDocument.id)
+            .eq('entity_type', 'tenancy')
+            .eq('link_type', 'source_document')
+            .limit(1)
+            .maybeSingle();
+          if (existingLink.error) throw existingLink.error;
+
+          const extraction = storedExtractionForReview(latestExtraction.data as ExistingExtraction, existingDocument);
+          stage = 'mapping';
+          logExtractionDiagnostic('existing_document_reused', {
+            requestId,
+            stage,
+            workspaceId,
+            documentId: existingDocument.id,
+            extractionId: latestExtraction.data.id,
+            tenancyId: existingLink.data?.entity_id ?? null
+          });
+          return respond(200, {
+            success: true,
+            reused: true,
+            requestId,
+            provider: extraction.provider,
+            model: extraction.provider === 'openai' ? extraction.document.model : null,
+            fallbackUsed: extraction.fallbackUsed,
+            fallbackReason: extraction.fallbackReason,
+            documentId: existingDocument.id,
+            extractionId: latestExtraction.data.id,
+            tenancyId: existingLink.data?.entity_id ?? '',
+            extraction,
+            summary: extraction.summary,
+            risks: extraction.legalIntelligence.risks,
+            warnings: ['Existing document reused'],
+            confidence: extraction.legalIntelligence.confidence,
+            document: {
+              originalFilename: existingDocument.original_filename ?? file.name,
+              storagePath: existingDocument.storage_path ?? '',
+              mimeType: existingDocument.mime_type ?? mimeType,
+              fileSize: existingDocument.file_size ?? file.size,
+              documentType: existingDocument.document_type ?? extraction.document.documentType,
+              uploadStatus: existingDocument.upload_status ?? 'uploaded',
+              documentHash: existingDocument.document_hash ?? documentHash
+            }
+          });
+        }
+
+        if (!retryableDocumentStatuses.includes(String(existingDocument.processing_status)) || !existingDocument.storage_path) {
+          return fail(409, 'database', 'duplicate-document', {
+            documentId: existingDocument.id,
+            retryAllowed: false
+          });
+        }
+
+        storagePath = existingDocument.storage_path;
+        logExtractionDiagnostic('existing_document_retry_started', {
+          requestId,
+          stage,
+          workspaceId,
+          documentId: existingDocument.id,
+          processingStatus: existingDocument.processing_status
+        });
+      } else {
+        stage = 'storage';
+        storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
+        const uploadStartedAt = Date.now();
+        const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
+        if (upload.error) throw upload.error;
+        uploadedPath = storagePath;
+        uploadedStorageReference = String(upload.data?.id ?? upload.data?.path ?? '');
+        logExtractionDiagnostic('storage_completed', {
+          requestId,
+          stage,
+          fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+          fileSize: file.size,
+          elapsedMs: Date.now() - uploadStartedAt
+        });
+        logExtractionDiagnostic('upload_success', {
+          requestId,
+          stage: 'storage',
+          fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+          fileSize: file.size,
+          elapsedMs: Date.now() - uploadStartedAt
         });
       }
-
-      stage = 'storage';
-      const storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
-      const uploadStartedAt = Date.now();
-      const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
-      if (upload.error) throw upload.error;
-      uploadedPath = storagePath;
-      logExtractionDiagnostic('storage_completed', {
-        requestId,
-        stage,
-        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
-        fileSize: file.size,
-        elapsedMs: Date.now() - uploadStartedAt
-      });
-      logExtractionDiagnostic('upload_success', {
-        requestId,
-        stage: 'storage',
-        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
-        fileSize: file.size,
-        elapsedMs: Date.now() - uploadStartedAt
-      });
 
       let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
       stage = isPdf ? 'pdf' : isDocx ? 'docx' : 'parser';
@@ -294,25 +440,28 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
       stage = 'mapping';
       return respond(200, {
         success: true,
+        reused: Boolean(existingDocument),
         requestId,
         provider: extraction.provider,
         model: extraction.provider === 'openai' ? extraction.document.model : null,
         fallbackUsed: extraction.fallbackUsed,
         fallbackReason: extraction.fallbackReason,
-        documentId: String(upload.data?.id ?? upload.data?.path ?? ''),
+        documentId: existingDocument?.id ?? uploadedStorageReference,
+        extractionId: '',
+        tenancyId: '',
         extraction,
         summary: extraction.summary,
         risks: extraction.legalIntelligence.risks,
-        warnings: extraction.legalIntelligence.warnings,
+        warnings: existingDocument ? ['Existing document reused'] : extraction.legalIntelligence.warnings,
         confidence: extraction.legalIntelligence.confidence,
         document: {
-          originalFilename: file.name,
+          originalFilename: existingDocument?.original_filename ?? file.name,
           storagePath,
-          mimeType,
-          fileSize: file.size,
-          documentType: extraction.document.documentType,
-          uploadStatus: 'uploaded',
-          documentHash
+          mimeType: existingDocument?.mime_type ?? mimeType,
+          fileSize: existingDocument?.file_size ?? file.size,
+          documentType: existingDocument?.document_type ?? extraction.document.documentType,
+          uploadStatus: existingDocument?.upload_status ?? 'uploaded',
+          documentHash: existingDocument?.document_hash ?? documentHash
         }
       });
     } catch (error) {

@@ -41,6 +41,10 @@ type DiagnosticDetails = {
   fallbackReason?: string | null;
   persisted?: boolean;
   workspaceId?: string;
+  documentId?: string | null;
+  extractionId?: string | null;
+  tenancyId?: string | null;
+  processingStatus?: string | null;
   role?: string;
   postgrestCode?: string;
   rpcName?: string;
