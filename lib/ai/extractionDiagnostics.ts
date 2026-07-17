@@ -48,6 +48,8 @@ type DiagnosticDetails = {
   role?: string;
   postgrestCode?: string;
   rpcName?: string;
+  linkedContactCount?: number;
+  warningCount?: number;
 };
 
 export function logExtractionDiagnostic(event: string, details: DiagnosticDetails = {}): void {

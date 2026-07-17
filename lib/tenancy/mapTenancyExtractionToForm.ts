@@ -99,6 +99,11 @@ export function mapTenancyExtractionToForm(
   const summary = text(root.summary);
   const risks = array(read(legal, 'risks'));
   const warnings = array(read(legal, 'warnings')).map(text).filter(Boolean);
+  const witnessContacts = array(read(legal, 'contacts')).flatMap((contact) => {
+    const candidate = record(contact);
+    return text(candidate.role).toLowerCase() === 'witness' ? [text(candidate.name) || text(candidate.company)] : [];
+  }).filter(Boolean).join(', ');
+  const structuredInventory = array(read(legal, 'inventory.items')).map(text).filter(Boolean).join('\n');
   const notes = [
     summary,
     risks.length ? `Risks:\n- ${risks.map(riskSummary).filter(Boolean).join('\n- ')}` : '',
@@ -108,12 +113,12 @@ export function mapTenancyExtractionToForm(
   const mapped: TenancyMappedForm = {
     tenantName: value(read(legal, 'tenant.name') ?? read(root, 'tenant.name')),
     tenantCompany: value(read(legal, 'tenant.company')),
-    tenantIdentification: value(read(legal, 'tenant.ic_passport') ?? read(root, 'tenant.idNo')),
+    tenantIdentification: formatMalaysianIdentification(value(read(legal, 'tenant.ic_passport') ?? read(root, 'tenant.idNo'))),
     tenantPhone: normalizeMalaysianPhone(value(read(legal, 'tenant.phone') ?? read(root, 'tenant.phone'))),
     tenantEmail: value(read(legal, 'tenant.email') ?? read(root, 'tenant.email')).toLowerCase(),
     landlordName: value(read(legal, 'landlord.name') ?? read(root, 'landlord.name')),
     landlordCompany: value(read(legal, 'landlord.company')),
-    landlordIdentification: value(read(legal, 'landlord.ic_passport') ?? read(root, 'landlord.idNo')),
+    landlordIdentification: formatMalaysianIdentification(value(read(legal, 'landlord.ic_passport') ?? read(root, 'landlord.idNo'))),
     landlordPhone: normalizeMalaysianPhone(value(read(legal, 'landlord.phone') ?? read(root, 'landlord.phone'))),
     landlordEmail: value(read(legal, 'landlord.email') ?? read(root, 'landlord.email')).toLowerCase(),
     propertyName: value(read(legal, 'property.name') ?? read(root, 'property.propertyName')),
@@ -122,7 +127,7 @@ export function mapTenancyExtractionToForm(
     propertyType: value(read(legal, 'property.type') ?? read(root, 'property.propertyType')),
     buildUp: value(read(legal, 'property.build_up')),
     landArea: value(read(legal, 'property.land_area')),
-    carParks: value(read(legal, 'property.car_parks')),
+    carParks: value(read(legal, 'property.car_parks')) || value(read(legal, 'parking.bays')),
     monthlyRental,
     securityDeposit: normalizeExtractedMoney(read(legal, 'financial.security_deposit') ?? read(root, 'financial.securityDeposit'), monthlyRental, 'financial.security_deposit', fieldConfidence, sourceReferences),
     generalUtilityDeposit: normalizeExtractedMoney(read(legal, 'financial.utility_deposit') ?? read(root, 'financial.utilityDeposit'), monthlyRental, 'financial.utility_deposit', fieldConfidence, sourceReferences),
@@ -139,9 +144,9 @@ export function mapTenancyExtractionToForm(
     iwkResponsibility: value(read(legal, 'utilities.iwk')),
     wifiResponsibility: value(read(legal, 'utilities.wifi')),
     specialClauses: array(read(legal, 'special_clauses')).map(text).filter(Boolean).join('\n\n'),
-    witnesses: value(read(legal, 'legal.witnesses')),
-    inventory: value(read(legal, 'legal.inventory')),
-    latePayment: value(read(legal, 'legal.late_payment')),
+    witnesses: value(read(legal, 'legal.witnesses')) || witnessContacts,
+    inventory: value(read(legal, 'legal.inventory')) || structuredInventory || value(read(legal, 'inventory.furnished')),
+    latePayment: value(read(legal, 'legal.late_payment')) || value(read(legal, 'payment.late_payment_interest')),
     termination: value(read(legal, 'legal.termination')),
     viewingRights: value(read(legal, 'legal.viewing_rights')),
     maintenance: value(read(legal, 'legal.maintenance')),
@@ -213,7 +218,13 @@ export function normalizeDateForInput(input: string): string {
 
 export function normalizeMalaysianPhone(input: string): string {
   const normalized = normalizePhone(input);
-  return normalized.normalized || input.trim();
+  return normalized.display || normalized.normalized || input.trim();
+}
+
+export function formatMalaysianIdentification(input: string): string {
+  const compact = input.replace(/\s+/g, '');
+  const digits = compact.replace(/\D/g, '');
+  return /^\d{12}$/.test(digits) ? `${digits.slice(0, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}` : input.trim();
 }
 
 function value(input: unknown): string {

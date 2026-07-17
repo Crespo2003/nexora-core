@@ -6,7 +6,7 @@ import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIn
 import { logExtractionDiagnostic } from './extractionDiagnostics';
 import { formatNexoraDate } from '../dates/formatDate';
 import { formatMYR } from '../formatters';
-import { normalizeIdentification } from './tenancyExtractionContract';
+import { normalizeIdentification, normalizePersonName } from './tenancyExtractionContract';
 import {
   canonicalTenancyExtractionSchema,
   parseOpenAITenancyResponse,
@@ -17,8 +17,19 @@ export type LegalParty = {
   name: string;
   company: string;
   ic_passport: string;
+  identification_type?: string;
+  company_number?: string;
   phone: string;
   email: string;
+  correspondence_address?: string;
+};
+
+export type ExtractedTenancyContact = LegalParty & {
+  role: 'tenant' | 'landlord' | 'witness' | 'agent' | 'law_firm';
+  represents: 'tenant' | 'landlord' | 'both' | 'neutral' | 'unknown';
+  source_page: number | null;
+  source_excerpt: string;
+  confidence: number;
 };
 
 export type LegalRiskSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -46,10 +57,16 @@ export type TenancyLegalIntelligence = {
   confidence: number;
   tenant: LegalParty;
   landlord: LegalParty;
+  contacts?: ExtractedTenancyContact[];
   property: {
     name: string;
     unit: string;
     address: string;
+    street?: string;
+    postcode?: string;
+    city?: string;
+    state?: string;
+    country?: string;
     type: string;
     build_up: string;
     land_area: string;
@@ -61,12 +78,16 @@ export type TenancyLegalIntelligence = {
     utility_deposit: number;
     access_card_deposit: number;
     car_park_deposit: number;
+    holding_deposit?: number;
+    booking_fee?: number;
     stamp_duty: number;
   };
   tenancy: {
     commencement_date: string;
     expiry_date: string;
     renewal_option: string;
+    renewal_period?: string;
+    automatic_renewal?: string;
     notice_period: string;
     payment_due_day: string;
   };
@@ -75,6 +96,18 @@ export type TenancyLegalIntelligence = {
     water: string;
     iwk: string;
     wifi: string;
+    aircond?: string;
+    maintenance_fee?: string;
+    quit_rent?: string;
+    assessment?: string;
+  };
+  payment?: { method: string; bank_name: string; account_number: string; account_holder: string; late_payment_interest: string; grace_period: string };
+  parking?: { bays: string; bay_numbers: string; access_cards: string; remote_controls: string; keys: string };
+  inventory?: { items: string[]; furnished: string };
+  clause_coverage?: {
+    pets: boolean; subletting: boolean; airbnb: boolean; illegal_business: boolean; termination: boolean; default: boolean;
+    force_majeure: boolean; viewing_rights: boolean; landlord_access: boolean; deposit_refund: boolean; repairs: boolean;
+    maintenance: boolean; insurance: boolean;
   };
   legal: {
     signatures: string;
@@ -128,12 +161,14 @@ type ExtractTenancyOptions = {
 };
 
 const confidencePaths = [
-  'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.phone', 'tenant.email',
-  'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.phone', 'landlord.email',
-  'property.name', 'property.unit', 'property.address', 'property.type', 'property.build_up', 'property.land_area', 'property.car_parks',
-  'financial.monthly_rental', 'financial.security_deposit', 'financial.utility_deposit', 'financial.access_card_deposit', 'financial.car_park_deposit', 'financial.stamp_duty',
-  'tenancy.commencement_date', 'tenancy.expiry_date', 'tenancy.renewal_option', 'tenancy.notice_period', 'tenancy.payment_due_day',
-  'utilities.tnb', 'utilities.water', 'utilities.iwk', 'utilities.wifi',
+  'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.company_number', 'tenant.phone', 'tenant.email', 'tenant.correspondence_address',
+  'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.company_number', 'landlord.phone', 'landlord.email', 'landlord.correspondence_address',
+  'property.name', 'property.unit', 'property.address', 'property.street', 'property.postcode', 'property.city', 'property.state', 'property.country', 'property.type', 'property.build_up', 'property.land_area', 'property.car_parks',
+  'financial.monthly_rental', 'financial.security_deposit', 'financial.utility_deposit', 'financial.access_card_deposit', 'financial.car_park_deposit', 'financial.holding_deposit', 'financial.booking_fee', 'financial.stamp_duty',
+  'tenancy.commencement_date', 'tenancy.expiry_date', 'tenancy.renewal_option', 'tenancy.renewal_period', 'tenancy.automatic_renewal', 'tenancy.notice_period', 'tenancy.payment_due_day',
+  'payment.method', 'payment.bank_name', 'payment.account_number', 'payment.account_holder', 'payment.late_payment_interest', 'payment.grace_period',
+  'utilities.tnb', 'utilities.water', 'utilities.iwk', 'utilities.wifi', 'utilities.aircond', 'utilities.maintenance_fee', 'utilities.quit_rent', 'utilities.assessment',
+  'parking.bays', 'parking.bay_numbers', 'parking.access_cards', 'parking.remote_controls', 'parking.keys', 'inventory.items',
   'legal.signatures', 'legal.witnesses', 'legal.stamp_duty', 'legal.inventory', 'legal.restrictions', 'legal.late_payment',
   'legal.termination', 'legal.viewing_rights', 'legal.insurance', 'legal.maintenance', 'legal.access_card', 'legal.car_park',
   'special_clauses'
@@ -145,14 +180,22 @@ const extractionInstructions = `You are Nexora AI Legal Intelligence, a speciali
 Read every supplied word. Extract facts only from the agreement; never infer identity, contact, property, money, or legal terms that are absent.
 Understand English, Simplified or Traditional Chinese, Bahasa Malaysia, and mixed-language Malaysian agreements.
 Classify the premises as Residential, Commercial, Industrial, Office, Retail, Bungalow, Embassy, Factory, Warehouse, Shoplot, or the most precise stated type.
-Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM symbol or commas.
+Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM symbol or commas. Do not replace an explicit written amount with a calculated amount.
 Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is absent or ambiguous.
 Use empty strings, null money values, and empty arrays for facts that are not stated.
+Extract tenant, landlord, witness, agent, and law-firm contacts into contacts. Include every stated name, IC/passport, company registration number, phone, email, correspondence address, stated role, source page, concise source excerpt, and confidence. Keep the person/company identity value separate from its label.
+For tenant and landlord, extract identification_type, company_number, and correspondence_address as well as the core particulars.
+Split the property into name, unit_number, street, postcode, city, state, country, and address. The address may retain the complete source address; never invent an address component.
+For security, utility, access-card, car-park, holding deposits and booking fee, first preserve an explicit monetary amount. When no amount is written but the agreement explicitly gives a rental multiple, calculate it from monthly_rental. Recognize two (2) months rental, two months' rental, one month rental, half month rental, 0.5 month rental, equal to, and equivalent to. Do not calculate when the agreement does not clearly state a rental multiple.
+Extract payment method, bank name, account number, account holder, rental due day, late-payment interest, grace period, renewal period, automatic renewal, holding deposit and booking fee.
+For utilities record who pays or whether each is included/excluded for electricity/TNB, water, IWK, internet/WiFi, air-conditioning, maintenance fee, quit rent, and assessment.
+For parking record bays, bay numbers, access cards, remote controls, and keys. Extract a structured inventory item list for furnished items such as beds, wardrobes, appliances, furniture, curtains, and water heaters.
+Set every clause_coverage boolean to true only when a material clause is present. Cover pets, subletting, Airbnb/short stays, illegal business, termination, default, force majeure, viewing rights, landlord access, deposit refund, repairs, maintenance, and insurance.
 Preserve material special clauses as concise complete statements.
 Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
-Return the canonical schema exactly. It has document, confidence, tenant, landlord, property, financial, tenancy, utilities, legal, clauses, risks, and warnings. Do not add fields.
+Return the canonical schema exactly. It has document, confidence, tenant, landlord, contacts, property, financial, tenancy, payment, utilities, parking, inventory, clause_coverage, legal, clauses, risks, and warnings. Do not add fields.
 Each risk must include a stable snake_case code, severity, category, evidence-based reason, and practical recommendation.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
@@ -229,7 +272,7 @@ export async function extractTenancyText(
       requestId: options.requestId,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
-  const normalized = validateFieldEvidence(normalizeExtraction(mapCanonicalTenancyExtraction(reconciled)), normalizedText);
+  const normalized = validateFieldEvidence(enrichExtractedTenancyTerms(normalizeExtraction(mapCanonicalTenancyExtraction(reconciled)), normalizedText), normalizedText);
   const extraction = applyRiskEngine(normalized, normalizedText);
 
   return {
@@ -261,6 +304,46 @@ export function splitTenancyDocument(rawText: string, maximumCharacters = 48_000
   }
   if (current) chunks.push(current);
   return chunks;
+}
+
+/**
+ * Fills a deposit only when the agreement itself supplies an unambiguous amount
+ * or rental multiple. Explicit amounts, including an explicit zero, always win.
+ */
+export function enrichExtractedTenancyTerms(
+  source: TenancyLegalIntelligence,
+  rawText: string
+): TenancyLegalIntelligence {
+  const extraction = normalizeExtraction(source);
+  const monthlyRental = extraction.financial.monthly_rental;
+  if (monthlyRental <= 0) return extraction;
+
+  const financial = { ...extraction.financial };
+  const evidence = { ...extraction.field_evidence };
+  const warnings = [...extraction.warnings];
+  const deposits: Array<{ field: keyof Pick<TenancyLegalIntelligence['financial'], 'security_deposit' | 'utility_deposit' | 'access_card_deposit' | 'car_park_deposit'>; label: string; aliases: string[] }> = [
+    { field: 'security_deposit', label: 'Security deposit', aliases: ['security deposit', 'earnest deposit'] },
+    { field: 'utility_deposit', label: 'Utility deposit', aliases: ['utility deposit', 'utilities deposit'] },
+    { field: 'access_card_deposit', label: 'Access card deposit', aliases: ['access card deposit', 'access deposit'] },
+    { field: 'car_park_deposit', label: 'Car park deposit', aliases: ['car park deposit', 'parking deposit', 'remote control deposit', 'car park remote deposit'] }
+  ];
+
+  for (const deposit of deposits) {
+    if (financial[deposit.field] > 0) continue;
+    const explicit = findExplicitDepositAmount(rawText, deposit.aliases);
+    if (explicit) {
+      financial[deposit.field] = explicit.amount;
+      evidence[`financial.${deposit.field}`] = { value: String(explicit.amount), confidence: 98, source_page: explicit.page, source_excerpt: explicit.excerpt };
+      continue;
+    }
+    const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
+    if (multiple === null) continue;
+    const amount = roundMoney(monthlyRental * multiple.months);
+    financial[deposit.field] = amount;
+    evidence[`financial.${deposit.field}`] = { value: String(amount), confidence: 88, source_page: multiple.page, source_excerpt: multiple.excerpt };
+    warnings.push(`${deposit.label} was calculated from the stated ${multiple.months}-month rental multiple; verify the agreement wording.`);
+  }
+  return { ...extraction, financial, field_evidence: evidence, warnings: uniqueStrings(warnings) };
 }
 
 export function applyRiskEngine(
@@ -296,12 +379,20 @@ export function applyRiskEngine(
   const expectedSecurityMonths = extractDepositMonths(rawText, 'security');
   if (expectedSecurityMonths !== null && extraction.financial.monthly_rental > 0) {
     const expected = extraction.financial.monthly_rental * expectedSecurityMonths;
-    if (Math.abs(expected - extraction.financial.security_deposit) > 1) addRisk(risks, 'security_deposit_mismatch', 'high', 'The security deposit amount does not match the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount before signing.');
+    if (Math.abs(expected - extraction.financial.security_deposit) > 1) {
+      const source = findDepositRentalMultiple(rawText, ['security deposit', 'earnest deposit']);
+      addRisk(risks, 'security_deposit_mismatch', 'high', 'Requires Review: the extracted security deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
+      warnings.push('Requires Review: security deposit conflicts with the stated rental multiple.');
+    }
   }
   const expectedUtilityMonths = extractDepositMonths(rawText, 'utilit');
   if (expectedUtilityMonths !== null && extraction.financial.monthly_rental > 0) {
     const expected = extraction.financial.monthly_rental * expectedUtilityMonths;
-    if (Math.abs(expected - extraction.financial.utility_deposit) > 1) addRisk(risks, 'utility_deposit_mismatch', 'high', 'The utility deposit amount does not match the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount before signing.');
+    if (Math.abs(expected - extraction.financial.utility_deposit) > 1) {
+      const source = findDepositRentalMultiple(rawText, ['utility deposit', 'utilities deposit']);
+      addRisk(risks, 'utility_deposit_mismatch', 'high', 'Requires Review: the extracted utility deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
+      warnings.push('Requires Review: utility deposit conflicts with the stated rental multiple.');
+    }
   }
 
   const unusualClause = findSourceExcerpt(rawText, /evict.{0,80}without (?:a )?court|enter.{0,80}without (?:prior )?notice|forfeit.{0,80}without notice|waive.{0,80}(?:legal|statutory) rights?/i);
@@ -404,12 +495,18 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
   const extraction: TenancyLegalIntelligence = {
     document_type: source.document.type,
     confidence: source.confidence,
-    tenant: { name: source.tenant.name, company: source.tenant.company, ic_passport: source.tenant.identification, phone: source.tenant.phone, email: source.tenant.email },
-    landlord: { name: source.landlord.name, company: source.landlord.company, ic_passport: source.landlord.identification, phone: source.landlord.phone, email: source.landlord.email },
+    tenant: mapParty(source.tenant),
+    landlord: mapParty(source.landlord),
+    contacts: source.contacts.map((contact) => ({ ...mapParty(contact), role: contact.role, represents: contact.represents, source_page: contact.source_page, source_excerpt: contact.source_excerpt, confidence: Math.round(contact.confidence * 100) })),
     property: {
       name: source.property.name,
       unit: source.property.unit_number,
       address: source.property.address,
+      street: source.property.street,
+      postcode: source.property.postcode,
+      city: source.property.city,
+      state: source.property.state,
+      country: source.property.country,
       type: source.property.property_type,
       build_up: source.property.build_up,
       land_area: source.property.land_area,
@@ -421,10 +518,16 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
       utility_deposit: source.financial.utility_deposit ?? 0,
       access_card_deposit: source.financial.access_card_deposit ?? 0,
       car_park_deposit: source.financial.car_park_deposit ?? 0,
+      holding_deposit: source.financial.holding_deposit ?? 0,
+      booking_fee: source.financial.booking_fee ?? 0,
       stamp_duty: source.financial.stamp_duty ?? 0
     },
     tenancy: { ...source.tenancy, payment_due_day: source.tenancy.payment_due_day ?? '' },
+    payment: source.payment,
     utilities: source.utilities,
+    parking: source.parking,
+    inventory: source.inventory,
+    clause_coverage: source.clause_coverage,
     legal: source.legal,
     special_clauses: source.clauses,
     risks: source.risks.map((risk) => ({ ...risk, source_page: null, source_excerpt: '' })),
@@ -436,6 +539,19 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
   return extraction;
 }
 
+function mapParty(source: { name: string; company: string; identification: string; identification_type: string; company_number: string; phone: string; email: string; correspondence_address: string }): LegalParty {
+  return {
+    name: normalizePersonName(source.name),
+    company: source.company,
+    ic_passport: normalizeIdentification(source.identification),
+    identification_type: source.identification_type,
+    company_number: normalizeIdentification(source.company_number),
+    phone: source.phone,
+    email: source.email,
+    correspondence_address: source.correspondence_address
+  };
+}
+
 function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalIntelligence {
   const text = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
   const money = (value: unknown) => {
@@ -443,34 +559,45 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
   };
   const party = (value: Partial<LegalParty> | undefined): LegalParty => ({
-    name: text(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
-    phone: normalizeMalaysianPhone(text(value?.phone)), email: normalizeEmail(text(value?.email))
+    name: normalizePersonName(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
+    identification_type: text(value?.identification_type), company_number: normalizeIdentification(value?.company_number).replace(/\s+/g, ''),
+    phone: normalizeMalaysianPhone(text(value?.phone)), email: normalizeEmail(text(value?.email)), correspondence_address: text(value?.correspondence_address)
   });
   return {
     document_type: text(source.document_type),
     confidence: Math.min(1, Math.max(0, Number(source.confidence) || 0)),
     tenant: party(source.tenant),
     landlord: party(source.landlord),
+    contacts: normalizeContacts(source.contacts),
     property: {
       name: text(source.property?.name), unit: text(source.property?.unit), address: text(source.property?.address),
+      street: text(source.property?.street), postcode: text(source.property?.postcode), city: text(source.property?.city),
+      state: text(source.property?.state), country: text(source.property?.country),
       type: normalizePropertyType(text(source.property?.type)), build_up: normalizeArea(text(source.property?.build_up)),
       land_area: normalizeArea(text(source.property?.land_area)), car_parks: text(source.property?.car_parks)
     },
     financial: {
       monthly_rental: money(source.financial?.monthly_rental), security_deposit: money(source.financial?.security_deposit),
       utility_deposit: money(source.financial?.utility_deposit), access_card_deposit: money(source.financial?.access_card_deposit),
-      car_park_deposit: money(source.financial?.car_park_deposit), stamp_duty: money(source.financial?.stamp_duty)
+      car_park_deposit: money(source.financial?.car_park_deposit), holding_deposit: money(source.financial?.holding_deposit),
+      booking_fee: money(source.financial?.booking_fee), stamp_duty: money(source.financial?.stamp_duty)
     },
     tenancy: {
       commencement_date: normalizeDate(text(source.tenancy?.commencement_date)),
       expiry_date: normalizeDate(text(source.tenancy?.expiry_date)),
-      renewal_option: normalizePercentages(text(source.tenancy?.renewal_option)), notice_period: normalizeNoticePeriod(text(source.tenancy?.notice_period)),
+      renewal_option: normalizePercentages(text(source.tenancy?.renewal_option)), renewal_period: normalizeNoticePeriod(text(source.tenancy?.renewal_period)),
+      automatic_renewal: text(source.tenancy?.automatic_renewal), notice_period: normalizeNoticePeriod(text(source.tenancy?.notice_period)),
       payment_due_day: normalizePaymentDay(text(source.tenancy?.payment_due_day))
     },
     utilities: {
       tnb: text(source.utilities?.tnb), water: text(source.utilities?.water),
-      iwk: text(source.utilities?.iwk), wifi: text(source.utilities?.wifi)
+      iwk: text(source.utilities?.iwk), wifi: text(source.utilities?.wifi), aircond: text(source.utilities?.aircond),
+      maintenance_fee: text(source.utilities?.maintenance_fee), quit_rent: text(source.utilities?.quit_rent), assessment: text(source.utilities?.assessment)
     },
+    payment: normalizePayment(source.payment),
+    parking: normalizeParking(source.parking),
+    inventory: { items: uniqueStrings(source.inventory?.items ?? []), furnished: text(source.inventory?.furnished) },
+    clause_coverage: normalizeClauseCoverage(source.clause_coverage),
     legal: {
       signatures: text(source.legal?.signatures), witnesses: text(source.legal?.witnesses),
       stamp_duty: text(source.legal?.stamp_duty), inventory: text(source.legal?.inventory),
@@ -738,9 +865,52 @@ function extractRentalAmounts(text: string): number[] {
 }
 
 function extractDepositMonths(text: string, kind: 'security' | 'utilit'): number | null {
-  const pattern = new RegExp(`${kind}[\\s\\S]{0,100}?(\\d+(?:\\.\\d+)?)\\s*months?`, 'i');
-  const match = text.match(pattern);
-  return match ? Number(match[1]) : null;
+  const aliases = kind === 'security' ? ['security deposit', 'earnest deposit'] : ['utility deposit', 'utilities deposit'];
+  return findDepositRentalMultiple(text, aliases)?.months ?? null;
+}
+
+function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount: number; page: number | null; excerpt: string } | null {
+  const label = aliases.map(escapeRegExp).join('|');
+  const labelPattern = new RegExp(`(?:${label})`, 'i');
+  const amountPattern = /\\b(?:RM|MYR)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\b/i;
+  const lines = rawText.split(/\\r?\\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const labelMatch = line.match(labelPattern);
+    if (!labelMatch || labelMatch.index === undefined) continue;
+    const sameLineAmount = line.match(amountPattern);
+    const nextLineAmount = !sameLineAmount && lines[index + 1]?.trim().match(amountPattern);
+    const amountMatch = sameLineAmount ?? nextLineAmount;
+    if (!amountMatch) continue;
+    const amount = Number(amountMatch[1].replace(/,/g, ''));
+    if (!Number.isFinite(amount) || amount < 0) continue;
+    const excerpt = sameLineAmount ? line : `${line} ${lines[index + 1]}`;
+    const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(excerpt.trim()), 'i'));
+    return { amount: roundMoney(amount), page: source.page, excerpt: source.excerpt };
+  }
+  return null;
+}
+
+function findDepositRentalMultiple(rawText: string, aliases: string[]): { months: number; page: number | null; excerpt: string } | null {
+  const label = aliases.map(escapeRegExp).join('|');
+  const multiplier = '(?:half|0\\.5|one|two|three|four|five|six|seven|eight|nine|ten|twelve|\\d+(?:\\.\\d+)?)';
+  const term = `${multiplier}\\s*(?:\\(\\s*\\d+(?:\\.\\d+)?\\s*\\))?\\s*months?\\b(?:\\'s|\\')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)`;
+  const labelFirst = new RegExp(`(?:${label})[\\s\\S]{0,140}?${term}`, 'i');
+  const termFirst = new RegExp(`${term}[\\s\\S]{0,90}?(?:${label})`, 'i');
+  const match = rawText.match(labelFirst) ?? rawText.match(termFirst);
+  if (!match) return null;
+  const value = match[0].match(new RegExp(`\\b(${multiplier})\\s*(?:\\(\\s*\\d+(?:\\.\\d+)?\\s*\\))?\\s*months?\\b`, 'i'))?.[1]?.toLowerCase();
+  if (!value) return null;
+  const words: Record<string, number> = { half: 0.5, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
+  const months = words[value] ?? Number(value);
+  if (!Number.isFinite(months) || months <= 0 || months > 24) return null;
+  const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(match[0]), 'i'));
+  return { months, page: source.page, excerpt: source.excerpt };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function hasConflictingDates(extraction: TenancyLegalIntelligence, rawText: string): boolean {
@@ -772,8 +942,60 @@ function formatMoney(value: number): string {
   return new Intl.NumberFormat('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
 }
 
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function formatSummaryDate(value: string): string {
   return formatNexoraDate(value);
+}
+
+function normalizeContacts(value: ExtractedTenancyContact[] | undefined): ExtractedTenancyContact[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((contact) => {
+    const normalized = {
+      ...partyForContact(contact),
+      role: ['tenant', 'landlord', 'witness', 'agent', 'law_firm'].includes(contact.role) ? contact.role : 'witness' as const,
+      represents: ['tenant', 'landlord', 'both', 'neutral', 'unknown'].includes(contact.represents) ? contact.represents : 'unknown' as const,
+      source_page: Number.isInteger(contact.source_page) && Number(contact.source_page) > 0 ? Number(contact.source_page) : null,
+      source_excerpt: extractionText(contact.source_excerpt).slice(0, 500),
+      confidence: Math.max(0, Math.min(100, Number(contact.confidence) || 0))
+    };
+    if (!normalized.name && !normalized.company && !normalized.ic_passport && !normalized.company_number && !normalized.phone && !normalized.email) return [];
+    const key = `${normalized.role}:${normalized.email || normalized.phone || normalized.ic_passport || normalized.company_number || normalized.name}`.toLowerCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [normalized];
+  });
+}
+
+function partyForContact(value: Partial<LegalParty>): LegalParty {
+  return {
+    name: normalizePersonName(value.name), company: extractionText(value.company), ic_passport: normalizeIdentification(value.ic_passport).replace(/\s+/g, ''),
+    identification_type: extractionText(value.identification_type), company_number: normalizeIdentification(value.company_number).replace(/\s+/g, ''),
+    phone: normalizeMalaysianPhone(extractionText(value.phone)), email: normalizeEmail(extractionText(value.email)), correspondence_address: extractionText(value.correspondence_address)
+  };
+}
+
+function normalizePayment(value: Partial<TenancyLegalIntelligence['payment']> | undefined): TenancyLegalIntelligence['payment'] {
+  return {
+    method: extractionText(value?.method), bank_name: extractionText(value?.bank_name), account_number: extractionText(value?.account_number).replace(/^.*?(?:account\s*(?:no|number)?\s*[:#-]?\s*)/i, '').replace(/\s+/g, ''),
+    account_holder: normalizePersonName(value?.account_holder), late_payment_interest: normalizePercentages(extractionText(value?.late_payment_interest)), grace_period: normalizeNoticePeriod(extractionText(value?.grace_period))
+  };
+}
+
+function normalizeParking(value: Partial<TenancyLegalIntelligence['parking']> | undefined): TenancyLegalIntelligence['parking'] {
+  return { bays: extractionText(value?.bays), bay_numbers: extractionText(value?.bay_numbers), access_cards: extractionText(value?.access_cards), remote_controls: extractionText(value?.remote_controls), keys: extractionText(value?.keys) };
+}
+
+function extractionText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).replace(/\s+/g, ' ').trim() : '';
+}
+
+function normalizeClauseCoverage(value: Partial<TenancyLegalIntelligence['clause_coverage']> | undefined): TenancyLegalIntelligence['clause_coverage'] {
+  const keys = ['pets', 'subletting', 'airbnb', 'illegal_business', 'termination', 'default', 'force_majeure', 'viewing_rights', 'landlord_access', 'deposit_refund', 'repairs', 'maintenance', 'insurance'] as const;
+  return Object.fromEntries(keys.map((key) => [key, value?.[key] === true])) as TenancyLegalIntelligence['clause_coverage'];
 }
 
 function tenancyDuration(start: string, end: string): string {

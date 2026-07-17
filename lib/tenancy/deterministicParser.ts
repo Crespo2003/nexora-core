@@ -1,5 +1,5 @@
 import { currentIsoDate, displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
-import { applyRiskEngine, type TenancyLegalIntelligence } from '../ai/extractTenancy';
+import { applyRiskEngine, enrichExtractedTenancyTerms, type TenancyLegalIntelligence } from '../ai/extractTenancy';
 import type { Confidence, ExtractedField, TenancyExtraction, TenancyExtractionFallbackReason } from './parser';
 
 const empty = (): ExtractedField => ({ value: '', confidence: 'low' });
@@ -66,7 +66,7 @@ export function extractTenancyDeterministically(
   const all = [...Object.values(property), ...Object.values(landlord), ...Object.values(tenant), ...Object.values(financial), ...Object.values(dates), ...Object.values(clauses)];
   const detected = all.filter((field) => field.value).length;
   const overall: Confidence = detected >= 8 ? 'high' : detected >= 4 ? 'medium' : 'low';
-  const legalIntelligence = applyRiskEngine(toLegalIntelligence(property, landlord, tenant, financial, dates, clauses, overall), text);
+  const legalIntelligence = applyRiskEngine(enrichExtractedTenancyTerms(toLegalIntelligence(property, landlord, tenant, financial, dates, clauses, overall), text), text);
 
   return {
     property, landlord, tenant, financial, dates, clauses,

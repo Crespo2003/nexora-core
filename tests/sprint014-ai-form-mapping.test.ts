@@ -107,7 +107,7 @@ test('8. tenant and landlord names populate from their nested fields', () => {
   const mapped = mapTenancyExtractionToForm(aiResponse());
   assert.equal(mapped.tenantName, 'Aisha Rahman');
   assert.equal(mapped.landlordName, 'Lim Wei');
-  assert.equal(mapped.tenantPhone, '+60123456789');
+  assert.equal(mapped.tenantPhone, '+60 12-345 6789');
 });
 
 test('9. property address populates from the nested property object', () => {

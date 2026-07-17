@@ -26,6 +26,7 @@ import {
 } from '../lib/tenancy/mapTenancyExtractionToForm';
 import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
 import { formatMYR, parseMYR } from '../lib/formatters';
+import { normalizePhone } from '../lib/contacts/phone';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -288,6 +289,11 @@ function cleanNumber(value: unknown): number {
   return Number.isFinite(number) ? number : 0;
 }
 
+function displayPhone(value: string): string {
+  const normalized = normalizePhone(value);
+  return normalized.display || normalized.normalized || value.trim();
+}
+
 function toPaymentStatus(totalDue: number, amountPaid: number, dueDate: string): PaymentStatus {
   if (amountPaid >= totalDue) return 'paid';
   if (amountPaid > 0) return 'partial';
@@ -301,11 +307,11 @@ function mapTenancy(row: Record<string, unknown>): Tenancy {
     id: String(row.id),
     tenant: String(row.tenant ?? ''),
     tenantIdNo: String(row.tenant_id_no ?? ''),
-    tenantPhone: String(row.tenant_phone ?? ''),
+    tenantPhone: displayPhone(String(row.tenant_phone ?? '')),
     tenantEmail: String(row.tenant_email ?? ''),
     landlord: String(row.landlord ?? ''),
     landlordIdNo: String(row.landlord_id_no ?? ''),
-    landlordPhone: String(row.landlord_phone ?? ''),
+    landlordPhone: displayPhone(String(row.landlord_phone ?? '')),
     landlordEmail: String(row.landlord_email ?? ''),
     property: String(row.property ?? ''),
     unitNo: String(row.unit_no ?? ''),
@@ -1432,6 +1438,12 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
     if (!excerpt) return [];
     return [{ path, page: item.source_page, excerpt, confidence: item.confidence }];
   });
+  const additional = extraction.legalIntelligence;
+  const contacts = additional.contacts ?? [];
+  const presentClauses = Object.entries(additional.clause_coverage ?? {}).filter(([, present]) => present).map(([name]) => name.replaceAll('_', ' '));
+  const payment = additional.payment;
+  const parking = additional.parking;
+  const inventory = additional.inventory;
   return (
     <div className="memory-stack">
       <MemoryItem label="AI provider" value={extraction.provider} fallback={fallback} />
@@ -1450,6 +1462,15 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
           </p>
         )) : <p>{fallback}</p>}
       </details>
+      <details className="raw-text">
+        <summary>Extended tenancy intelligence</summary>
+        <p><strong>Property:</strong> {[additional.property.street, additional.property.postcode, additional.property.city, additional.property.state, additional.property.country].filter(Boolean).join(', ') || fallback}</p>
+        <p><strong>Payment:</strong> {[payment?.method, payment?.bank_name, payment?.account_number, payment?.account_holder, payment?.late_payment_interest, payment?.grace_period].filter(Boolean).join(' · ') || fallback}</p>
+        <p><strong>Parking and access:</strong> {[parking?.bays, parking?.bay_numbers, parking?.access_cards, parking?.remote_controls, parking?.keys].filter(Boolean).join(' · ') || fallback}</p>
+        <p><strong>Inventory:</strong> {inventory?.items?.join(', ') || inventory?.furnished || fallback}</p>
+        <p><strong>Clauses present:</strong> {presentClauses.join(', ') || fallback}</p>
+        <p><strong>Contacts:</strong> {contacts.map((contact) => `${contact.role}: ${contact.name || contact.company}${contact.source_page ? ` (page ${contact.source_page})` : ''}`).join(' · ') || fallback}</p>
+      </details>
     </div>
   );
 }
@@ -1457,7 +1478,7 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
 function confidenceFor(fieldConfidence: Record<string, number> | undefined, path: string): Confidence | undefined {
   const value = fieldConfidence?.[path];
   if (value === undefined) return undefined;
-  return value >= 80 ? 'high' : value >= 50 ? 'medium' : 'low';
+  return value >= 70 ? 'high' : value >= 40 ? 'medium' : 'low';
 }
 
 function renderReviewRisk(input: unknown): string {
@@ -1495,8 +1516,9 @@ function Field({
   confidence?: Confidence;
   language?: Language;
 }) {
+  const confidenceClass = confidence === 'low' ? 'critical-confidence' : confidence === 'medium' ? 'review-confidence' : '';
   return (
-    <label className={wide ? 'wide field' : 'field'}>
+    <label className={`${wide ? 'wide field' : 'field'} ${confidenceClass}`}>
       <span>{label}{required ? ' *' : ''}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
       {multiline
         ? <textarea rows={3} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
@@ -1526,8 +1548,9 @@ function NumberField({
   const t = getTranslations(language);
   const [focused, setFocused] = useState(false);
   const editingValue = value === '' ? '' : String(value);
+  const confidenceClass = confidence === 'low' ? 'critical-confidence' : confidence === 'medium' ? 'review-confidence' : '';
   return (
-    <label className="field">
+    <label className={`field ${confidenceClass}`}>
       <span>{label}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
       <input type="text" inputMode="decimal" placeholder={t.placeholders.amount} value={focused ? editingValue : formatMYR(value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onChange={(event) => { const amount = parseMYR(event.target.value); onChange(event.target.value === '' ? '' : amount ?? value); }} />
       {error && <em>{error}</em>}

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { CollectionPayload, TenancyPayload } from '../../../../lib/rental/payloads';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { logExtractionDiagnostic } from '../../../../lib/ai/extractionDiagnostics';
+import { syncExtractedTenancyContacts, type ContactSyncClient } from '../../../../lib/contacts/syncTenancyContacts';
 
 type ImportDocument = {
   originalFilename: string;
@@ -133,7 +134,33 @@ export async function POST(request: Request) {
     const documentId = String(result.documentCentre?.id ?? result.document?.id ?? '');
     const extractionId = String(result.documentExtraction?.id ?? result.extraction?.id ?? '');
     const tenancyId = String(result.tenancy?.id ?? '');
-    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    const warnings = Array.isArray(result.warnings) ? [...result.warnings] : [];
+    if (tenancyId) {
+      try {
+        const contacts = await syncExtractedTenancyContacts({
+          supabase: supabase as unknown as ContactSyncClient,
+          workspaceId,
+          tenancyId,
+          extraction: extraction.extractedJson
+        });
+        warnings.push(...contacts.warnings);
+        logExtractionDiagnostic('confirmation_contacts_synced', {
+          requestId,
+          stage: 'database',
+          workspaceId,
+          tenancyId,
+          linkedContactCount: contacts.linked,
+          warningCount: contacts.warnings.length
+        });
+      } catch (error) {
+        warnings.push('Extracted contacts require review before they can be linked to this tenancy.');
+        console.error('[tenancy-extraction] confirmation_contact_sync_failed', {
+          requestId,
+          tenancyId,
+          errorCode: getApiErrorMessage(error)
+        });
+      }
+    }
     logExtractionDiagnostic('confirmation_database_completed', {
       requestId,
       stage: 'database',

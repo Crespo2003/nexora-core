@@ -919,6 +919,18 @@ select {
   background: rgba(251, 191, 36, 0.08);
 }
 
+.field.review-confidence input,
+.field.review-confidence textarea {
+  border-color: rgba(251, 191, 36, 0.58);
+  background: rgba(251, 191, 36, 0.09);
+}
+
+.field.critical-confidence input,
+.field.critical-confidence textarea {
+  border-color: rgba(251, 113, 133, 0.72);
+  background: rgba(251, 113, 133, 0.1);
+}
+
 .review-actions {
   margin-top: 14px;
 }
