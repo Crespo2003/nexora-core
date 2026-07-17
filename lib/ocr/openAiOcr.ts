@@ -1,5 +1,6 @@
 import { classifyOpenAiError, createOpenAiClient } from '../ai/openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from '../ai/openAiConfig';
+import { logOpenAiDiagnostic } from '../ai/extractionDiagnostics';
 import type { OcrProvider, OcrResult } from './ocrProvider';
 import { FallbackOcrProvider } from './fallbackOcr';
 
@@ -16,6 +17,7 @@ export class OpenAiOcrProvider implements OcrProvider {
       ? { type: 'input_image' as const, image_url: `data:${input.mimeType};base64,${encoded}`, detail: 'high' as const }
       : { type: 'input_file' as const, filename: input.filename, file_data: `data:${input.mimeType};base64,${encoded}` };
     try {
+      logOpenAiDiagnostic('ocr_started', { ocrModel: this.model, openAiKeyPresent: true });
       const client = createOpenAiClient({ apiKey: this.apiKey, fetcher: this.fetcher, timeoutMs: 180_000, maxRetries: 2 });
       const response = await client.responses.create({
         model: this.model,
@@ -29,9 +31,16 @@ export class OpenAiOcrProvider implements OcrProvider {
         max_output_tokens: 30_000
       });
       const text = String(response.output_text ?? '').trim();
+      logOpenAiDiagnostic(text ? 'ocr_succeeded' : 'ocr_invalid_response', { ocrModel: this.model });
       return text ? { status: 'completed', text, error: '' } : { status: 'failed', text: '', error: 'ocr-malformed-or-empty-response' };
     } catch (error) {
       const classified = classifyOpenAiError(error);
+      logOpenAiDiagnostic('ocr_failed', {
+        ocrModel: this.model,
+        fallbackReason: classified.code,
+        statusCode: classified.status,
+        requestId: classified.requestId
+      });
       return { status: 'failed', text: '', error: classified.code === 'openai_timeout' ? 'ocr-provider-timeout' : 'ocr-provider-request-failed' };
     }
   }

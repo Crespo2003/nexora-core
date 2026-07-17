@@ -1,5 +1,18 @@
 import OpenAI, { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
+import { logOpenAiDiagnostic } from './extractionDiagnostics';
+
+export type OpenAiFailureCode =
+  | 'openai_not_configured'
+  | 'openai_authentication_failed'
+  | 'openai_permission_denied'
+  | 'openai_model_not_found'
+  | 'openai_rate_limited'
+  | 'openai_bad_request'
+  | 'openai_server_error'
+  | 'openai_timeout'
+  | 'openai_request_failed'
+  | 'invalid_ai_response';
 
 export type OpenAiStructuredRequest<T> = {
   apiKey?: string;
@@ -21,7 +34,11 @@ type ResponsesPayload = {
 };
 
 export class OpenAiClientError extends Error {
-  constructor(public readonly code: 'openai_not_configured' | 'openai_timeout' | 'openai_request_failed' | 'invalid_ai_response', public readonly status?: number) {
+  constructor(
+    public readonly code: OpenAiFailureCode,
+    public readonly status?: number,
+    public readonly requestId?: string
+  ) {
     super(code);
     this.name = 'OpenAiClientError';
   }
@@ -50,13 +67,15 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
   if (!request.apiKey && !config.configured) throw new OpenAiClientError('openai_not_configured');
 
   const attempts = Math.max(1, Math.min(request.maxAttempts ?? 3, 5));
+  const model = request.model ?? config.tenancyModel;
   let lastError: OpenAiClientError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      logOpenAiDiagnostic('request_started', { attempt, tenancyModel: model, openAiKeyPresent: true });
       const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: request.timeoutMs, maxRetries: 0 });
       const response = await client.responses.create({
-        model: request.model ?? config.tenancyModel,
+        model,
         store: false,
         input: [
           { role: 'system', content: [{ type: 'input_text', text: request.system }] },
@@ -84,12 +103,25 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         .trim();
       if (!outputText) throw new OpenAiClientError('invalid_ai_response');
       try {
-        return request.validate(JSON.parse(outputText));
+        const result = request.validate(JSON.parse(outputText));
+        logOpenAiDiagnostic('request_succeeded', {
+          attempt,
+          tenancyModel: model,
+          requestId: readResponseRequestId(response)
+        });
+        return result;
       } catch {
         throw new OpenAiClientError('invalid_ai_response');
       }
     } catch (error) {
       const normalized = classifyOpenAiError(error);
+      logOpenAiDiagnostic('request_failed', {
+        attempt,
+        tenancyModel: model,
+        fallbackReason: normalized.code,
+        statusCode: normalized.status,
+        requestId: normalized.requestId
+      });
       if (!isRetryableError(normalized) || attempt === attempts) throw normalized;
       lastError = normalized;
     }
@@ -110,9 +142,14 @@ export function classifyOpenAiError(error: unknown): OpenAiClientError {
       : new OpenAiClientError('openai_request_failed');
   }
   if (error instanceof APIError) {
-    return error.status === 401
-      ? new OpenAiClientError('openai_not_configured', error.status)
-      : new OpenAiClientError('openai_request_failed', error.status);
+    const requestId = readApiErrorRequestId(error);
+    if (error.status === 401) return new OpenAiClientError('openai_authentication_failed', error.status, requestId);
+    if (error.status === 403) return new OpenAiClientError('openai_permission_denied', error.status, requestId);
+    if (error.status === 404) return new OpenAiClientError('openai_model_not_found', error.status, requestId);
+    if (error.status === 429) return new OpenAiClientError('openai_rate_limited', error.status, requestId);
+    if (error.status === 400 || error.status === 422) return new OpenAiClientError('openai_bad_request', error.status, requestId);
+    if (error.status >= 500) return new OpenAiClientError('openai_server_error', error.status, requestId);
+    return new OpenAiClientError('openai_request_failed', error.status, requestId);
   }
   if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
     return new OpenAiClientError('openai_timeout');
@@ -123,8 +160,20 @@ export function classifyOpenAiError(error: unknown): OpenAiClientError {
 
 function isRetryableError(error: OpenAiClientError): boolean {
   if (error.code === 'openai_timeout' || error.code === 'invalid_ai_response') return true;
+  if (error.code === 'openai_rate_limited' || error.code === 'openai_server_error') return true;
   if (error.code !== 'openai_request_failed') return false;
-  return error.status === undefined || error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+  return error.status === undefined || error.status === 408 || error.status === 409;
+}
+
+function readApiErrorRequestId(error: APIError): string | undefined {
+  const candidate = error as APIError & { request_id?: string; requestID?: string };
+  return candidate.request_id ?? candidate.requestID;
+}
+
+function readResponseRequestId(response: unknown): string | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const candidate = response as { _request_id?: string; request_id?: string };
+  return candidate._request_id ?? candidate.request_id;
 }
 
 function retryDelay(attempt: number): number {

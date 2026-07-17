@@ -208,10 +208,10 @@ test('deterministic parser remains available when OpenAI cannot extract', async 
   const extraction = await extractTenancyDetails(rawText, 'fallback.txt', 'text/plain', {
     apiKey: 'invalid', fetcher: async () => new Response('{}', { status: 401 })
   });
-  assert.equal(extraction.advancedAiConfigured, false);
+  assert.equal(extraction.advancedAiConfigured, true);
   assert.equal(extraction.document.model, null);
   assert.equal(extraction.provider, 'deterministic');
-  assert.equal(extraction.fallbackReason, 'openai_not_configured');
+  assert.equal(extraction.fallbackReason, 'openai_authentication_failed');
   assert.equal(extraction.tenant.name.value, 'Fallback Tenant');
   assert.equal(extraction.financial.monthlyRental.value, '2500');
 });

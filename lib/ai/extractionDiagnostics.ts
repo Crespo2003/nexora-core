@@ -3,8 +3,13 @@ type DiagnosticDetails = {
   textLength?: number;
   usedOcr?: boolean;
   openAiConfigured?: boolean;
+  openAiKeyPresent?: boolean;
+  configurationReason?: string;
   tenancyModel?: string;
   ocrModel?: string;
+  attempt?: number;
+  statusCode?: number;
+  requestId?: string;
   provider?: 'openai' | 'deterministic';
   fallbackReason?: string | null;
   persisted?: boolean;
@@ -19,4 +24,8 @@ export function logExtractionDiagnostic(event: string, details: DiagnosticDetail
 export function logExtractionFailure(event: string, reason: string): void {
   if (typeof window !== 'undefined') return;
   console.warn('[tenancy-extraction]', event, { reason });
+}
+
+export function logOpenAiDiagnostic(event: string, details: DiagnosticDetails = {}): void {
+  logExtractionDiagnostic(`openai_${event}`, details);
 }

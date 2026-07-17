@@ -9,12 +9,14 @@ const readableText = `${'Complete Malaysian tenancy agreement clause. '.repeat(8
 test('OpenAI configuration requires only a usable server API key and defaults optional models', () => {
   assert.deepEqual(getOpenAiConfiguration({}), {
     configured: false,
+    keyPresent: false,
     tenancyModel: 'gpt-5.5',
     ocrModel: 'gpt-4.1-mini',
     reason: 'openai_not_configured'
   });
   assert.deepEqual(getOpenAiConfiguration({ OPENAI_API_KEY: 'sk-proj-production-key-with-safe-length' }), {
     configured: true,
+    keyPresent: true,
     tenancyModel: 'gpt-5.5',
     ocrModel: 'gpt-4.1-mini',
     reason: 'configured'
@@ -24,6 +26,27 @@ test('OpenAI configuration requires only a usable server API key and defaults op
     OPENAI_TENANCY_MODEL: 'custom-tenancy-model',
     OPENAI_OCR_MODEL: 'custom-ocr-model'
   }).configured, true);
+  assert.equal(getOpenAiConfiguration({ OPENAI_API_KEY: 'x' }).configured, true);
+});
+
+test('server runtime key always executes the OpenAI path, including safely quoted Vercel values', async () => {
+  const previous = process.env.OPENAI_API_KEY;
+  let called = false;
+  process.env.OPENAI_API_KEY = '"runtime-secret-value"';
+  try {
+    const extraction = await extractTenancyDetails(readableText, 'runtime-key.txt', 'text/plain', {
+      fetcher: async () => {
+        called = true;
+        return responseFor(validExtraction());
+      }
+    });
+    assert.equal(called, true);
+    assert.equal(extraction.provider, 'openai');
+    assert.equal(extraction.fallbackReason, null);
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous;
+  }
 });
 
 test('successful structured extraction reports OpenAI provider and low-confidence fields', async () => {
@@ -54,6 +77,18 @@ test('timeouts and invalid AI responses produce precise deterministic fallback r
   assert.equal(invalid.fallbackReason, 'invalid_ai_response');
 });
 
+test('provider authentication errors are never reported as missing configuration', async () => {
+  const extraction = await extractTenancyDetails(readableText, 'invalid-key.txt', 'text/plain', {
+    apiKey: 'present-but-invalid-key',
+    fetcher: async () => new Response(JSON.stringify({
+      error: { message: 'Invalid API key', type: 'invalid_request_error', code: 'invalid_api_key' }
+    }), { status: 401, headers: { 'Content-Type': 'application/json', 'x-request-id': 'req_test' } })
+  });
+  assert.equal(extraction.provider, 'deterministic');
+  assert.equal(extraction.advancedAiConfigured, true);
+  assert.equal(extraction.fallbackReason, 'openai_authentication_failed');
+});
+
 test('missing API key is the only unconfigured fallback condition', async () => {
   const previous = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
@@ -62,7 +97,8 @@ test('missing API key is the only unconfigured fallback condition', async () => 
     assert.equal(result.advancedAiConfigured, false);
     assert.equal(result.fallbackReason, 'openai_not_configured');
   } finally {
-    if (previous) process.env.OPENAI_API_KEY = previous;
+    if (previous === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous;
   }
 });
 

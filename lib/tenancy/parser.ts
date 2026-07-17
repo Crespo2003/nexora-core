@@ -18,6 +18,12 @@ export type ExtractedField = {
 
 export type TenancyExtractionFallbackReason =
   | 'openai_not_configured'
+  | 'openai_authentication_failed'
+  | 'openai_permission_denied'
+  | 'openai_model_not_found'
+  | 'openai_rate_limited'
+  | 'openai_bad_request'
+  | 'openai_server_error'
   | 'openai_timeout'
   | 'openai_request_failed'
   | 'invalid_ai_response'
@@ -212,6 +218,12 @@ function toLegacyExtraction(
 function extractionErrorCode(error: unknown): TenancyExtractionFallbackReason {
   const code = error instanceof Error ? error.message : '';
   if (code === 'openai_not_configured' || code === 'openai-not-configured') return 'openai_not_configured';
+  if (code === 'openai_authentication_failed') return 'openai_authentication_failed';
+  if (code === 'openai_permission_denied') return 'openai_permission_denied';
+  if (code === 'openai_model_not_found') return 'openai_model_not_found';
+  if (code === 'openai_rate_limited') return 'openai_rate_limited';
+  if (code === 'openai_bad_request') return 'openai_bad_request';
+  if (code === 'openai_server_error') return 'openai_server_error';
   if (code === 'openai_timeout' || code === 'openai-timeout') return 'openai_timeout';
   if (code === 'invalid_ai_response' || /invalid-extraction|empty-extraction|refused-extraction/.test(code)) return 'invalid_ai_response';
   if (code === 'ocr_failed' || /ocr/.test(code)) return 'ocr_failed';
