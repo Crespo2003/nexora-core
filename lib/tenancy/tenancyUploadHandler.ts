@@ -4,6 +4,7 @@ import { extractTenancyFile } from '../ai/tenancyExtractor';
 import { getOpenAiConfiguration } from '../ai/openAiConfig';
 import { logExtractionDiagnostic, logExtractionFailure } from '../ai/extractionDiagnostics';
 import { validateFileSignature, workspaceStoragePath } from '../documents/upload';
+import { formatNexoraDate } from '../dates/formatDate';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../supabase/server';
 import { maxTenancyUploadBytes, maxTenancyUploadRequestBytes } from './uploadLimits';
 
@@ -85,7 +86,7 @@ function storedExtractionForReview(
     legalIntelligence,
     document: {
       originalFilename: document.original_filename ?? 'tenancy-agreement',
-      uploadDate: extraction.created_at?.slice(0, 10) ?? '',
+      uploadDate: formatNexoraDate(extraction.created_at),
       documentType: document.document_type ?? 'tenancy_agreement',
       extractionStatus: extraction.extraction_status ?? 'extraction_completed',
       extractionConfidence: 100,

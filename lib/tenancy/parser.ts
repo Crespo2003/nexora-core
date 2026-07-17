@@ -1,4 +1,4 @@
-import { isoToDisplayDate } from '../dates/formatDate';
+import { currentIsoDate, isoToDisplayDate } from '../dates/formatDate';
 import { extractDocumentText } from '../documents/extractText';
 import {
   extractTenancyText,
@@ -202,7 +202,7 @@ function toLegacyExtraction(
     },
     document: {
       originalFilename,
-      uploadDate: isoToDisplayDate(new Date().toISOString().slice(0, 10)),
+      uploadDate: isoToDisplayDate(currentIsoDate()),
       documentType: legal.document_type || documentTypeFor(mimeType),
       extractionStatus: result.rawText.length >= 80 ? 'ready' : 'unreadable',
       extractionConfidence: confidence,

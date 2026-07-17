@@ -1,4 +1,5 @@
 import { formatMYR } from '../formatters';
+import { currentIsoDate, formatNexoraDate, isoMonthToDisplayMonth } from '../dates/formatDate';
 import type {
   CollectionPayment,
   CollectionStatus,
@@ -26,16 +27,11 @@ const providerLabels: Record<UtilityProvider, { en: string; zh: string }> = {
 };
 
 export function formatDisplayDate(isoDate: string) {
-  if (!isoDate) return '';
-  const [year, month, day] = isoDate.slice(0, 10).split('-');
-  if (!year || !month || !day) return isoDate;
-  return `${day}/${month}/${year}`;
+  return formatNexoraDate(isoDate);
 }
 
 export function formatDisplayMonth(isoMonth: string) {
-  const [year, month] = isoMonth.slice(0, 7).split('-');
-  if (!year || !month) return isoMonth;
-  return `${month}/${year}`;
+  return isoMonthToDisplayMonth(isoMonth);
 }
 
 export function maskAccountNumber(accountNumber: string) {
@@ -72,8 +68,8 @@ export function outstandingBalance(collection: SmartCollection) {
 }
 
 export function daysBetween(fromIso: string, toIso: string) {
-  const from = new Date(`${fromIso}T00:00:00`);
-  const to = new Date(`${toIso}T00:00:00`);
+  const from = new Date(`${fromIso}T00:00:00Z`);
+  const to = new Date(`${toIso}T00:00:00Z`);
   return Math.floor((to.getTime() - from.getTime()) / 86400000);
 }
 
@@ -256,7 +252,7 @@ ${input.agentName}`;
 export function renderLandlordUpdate(input: { tenant: TenancySummary; collection: SmartCollection; pendingUtilityBills: number; nextFollowUpDate: string; language: Language }) {
   const english = `Collection update for ${input.tenant.property} ${input.tenant.unitNo}
 
-Status: ${resolveCollectionStatus(input.collection, new Date().toISOString().slice(0, 10))}
+Status: ${resolveCollectionStatus(input.collection, currentIsoDate())}
 Total received: ${formatMYR(ledgerAmountPaid(input.collection.paymentLedger))}
 Outstanding: ${formatMYR(outstandingBalance(input.collection))}
 Utility bills pending: ${input.pendingUtilityBills}
@@ -267,7 +263,7 @@ Notes: ${input.collection.notes || notDetected.en}`;
 
   const chinese = `${input.tenant.property} ${input.tenant.unitNo} 收款更新
 
-状态：${resolveCollectionStatus(input.collection, new Date().toISOString().slice(0, 10))}
+状态：${resolveCollectionStatus(input.collection, currentIsoDate())}
 已收款：${formatMYR(ledgerAmountPaid(input.collection.paymentLedger))}
 未结余额：${formatMYR(outstandingBalance(input.collection))}
 待处理水电账单：${input.pendingUtilityBills}

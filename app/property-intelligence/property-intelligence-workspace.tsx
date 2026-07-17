@@ -6,6 +6,8 @@ import {
   ArrowLeft, BarChart3, Building2, Calculator, CircleDollarSign, Database, Languages,
   LayoutDashboard, Map, MapPin, Menu, Plus, RefreshCw, Search, Sparkles, Trash2, X
 } from 'lucide-react';
+import { DateInput } from '../../lib/dates/DateInput';
+import { formatNexoraDate } from '../../lib/dates/formatDate';
 
 export type PropertyIntelligenceView = 'intelligence' | 'analysis' | 'comparables' | 'nearby' | 'score' | 'map';
 type Row = Record<string, unknown> & { id: string };
@@ -157,7 +159,21 @@ function Analysis({ analysis, language, save, run, busy }: { analysis: Row; lang
 }
 
 function Comparables({ rows, submit, remove, busy }: { rows: Row[]; submit: (event: FormEvent<HTMLFormElement>) => void; remove: (id: string) => void; busy: boolean }) {
-  return <div className="pi-data-layout"><form className="pi-panel pi-entry-form" onSubmit={submit}><header><div><p>SOURCE-ATTRIBUTED</p><h2>Add comparable</h2></div></header><label><span>Type</span><select name="comparable_type"><option value="sale">Sale</option><option value="rental">Rental</option></select></label><label><span>Property name</span><input name="property_name" required/></label><label><span>Price</span><input name="price" type="number" min="0" step=".01"/></label><label><span>Monthly rental</span><input name="rental" type="number" min="0" step=".01"/></label><label><span>Built-up (sq ft)</span><input name="built_up_sqft" type="number" min="0" step=".01"/></label><label><span>Transaction date</span><input name="transaction_date" type="date"/></label><label><span>Source name</span><input name="source_name" required placeholder="Registry, portal or valuer"/></label><label><span>Source reference</span><input name="source_reference"/></label><button className="pi-primary" disabled={busy}><Plus size={16}/> Add comparable</button></form><section className="pi-panel pi-table-panel"><header><div><p>COMPARABLE SALES & RENTALS</p><h2>{rows.length} evidence record{rows.length === 1 ? '' : 's'}</h2></div></header>{rows.length ? <div className="pi-table-wrap"><table><thead><tr><th>Property</th><th>Type</th><th>Price / rental</th><th>PSF</th><th>Distance</th><th>Source</th><th></th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{String(row.property_name)}</strong><small>{String(row.transaction_date ?? 'Date not supplied')}</small></td><td>{String(row.comparable_type)}</td><td>{money(row.comparable_type === 'sale' ? row.price : row.rental)}</td><td>{row.psf ? money(row.psf) : '-'}</td><td>{row.distance_km ? `${row.distance_km} km` : '-'}</td><td>{String(row.source_name)}</td><td><button onClick={() => remove(row.id)} title="Delete comparable"><Trash2 size={15}/></button></td></tr>)}</tbody></table></div> : <PanelEmpty text="Add verified sale or rental evidence. Nexora will not create synthetic comparables."/>}</section></div>;
+  return <div className="pi-data-layout">
+    <form className="pi-panel pi-entry-form" onSubmit={submit}>
+      <header><div><p>SOURCE-ATTRIBUTED</p><h2>Add comparable</h2></div></header>
+      <label><span>Type</span><select name="comparable_type"><option value="sale">Sale</option><option value="rental">Rental</option></select></label>
+      <label><span>Property name</span><input name="property_name" required /></label>
+      <label><span>Price</span><input name="price" type="number" min="0" step=".01" /></label>
+      <label><span>Monthly rental</span><input name="rental" type="number" min="0" step=".01" /></label>
+      <label><span>Built-up (sq ft)</span><input name="built_up_sqft" type="number" min="0" step=".01" /></label>
+      <label><span>Transaction date</span><DateInput name="transaction_date" /></label>
+      <label><span>Source name</span><input name="source_name" required placeholder="Registry, portal or valuer" /></label>
+      <label><span>Source reference</span><input name="source_reference" /></label>
+      <button className="pi-primary" disabled={busy}><Plus size={16} /> Add comparable</button>
+    </form>
+    <section className="pi-panel pi-table-panel"><header><div><p>COMPARABLE SALES & RENTALS</p><h2>{rows.length} evidence record{rows.length === 1 ? '' : 's'}</h2></div></header>{rows.length ? <div className="pi-table-wrap"><table><thead><tr><th>Property</th><th>Type</th><th>Price / rental</th><th>PSF</th><th>Distance</th><th>Source</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{String(row.property_name)}</strong><small>{formatNexoraDate(row.transaction_date, 'Date not supplied')}</small></td><td>{String(row.comparable_type)}</td><td>{money(row.comparable_type === 'sale' ? row.price : row.rental)}</td><td>{row.psf ? money(row.psf) : '-'}</td><td>{row.distance_km ? `${row.distance_km} km` : '-'}</td><td>{String(row.source_name)}</td><td><button onClick={() => remove(row.id)} title="Delete comparable"><Trash2 size={15} /></button></td></tr>)}</tbody></table></div> : <PanelEmpty text="Add verified sale or rental evidence. Nexora will not create synthetic comparables." />}</section>
+  </div>;
 }
 
 function Nearby({ rows, submit, remove, busy }: { rows: Row[]; submit: (event: FormEvent<HTMLFormElement>) => void; remove: (id: string) => void; busy: boolean }) {

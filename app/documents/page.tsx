@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { TenancyExtraction } from '../../lib/ai/tenancyExtractor';
-import { displayDateToIso, isoToDisplayDate } from '../../lib/dates/formatDate';
+import { DateInput } from '../../lib/dates/DateInput';
+import { displayDateToIso, formatExtractedNexoraDate, isoToDisplayDate } from '../../lib/dates/formatDate';
 import type { DocumentExtractionRecord, DocumentRecord, DocumentType, ProcessingStatus, UploadQueueItem } from '../../lib/documents/types';
 import { documentTypes } from '../../lib/documents/types';
 import { validateDocumentFile } from '../../lib/documents/upload';
@@ -185,9 +186,9 @@ function reviewFormFromDocument(document: DocumentWithExtraction): ReviewForm {
     utilityDeposit: cleanNumber(fieldValue(extraction, 'financial.utilityDeposit')),
     accessCardDeposit: cleanNumber(fieldValue(extraction, 'financial.accessCardDeposit')),
     carParkRemoteDeposit: cleanNumber(fieldValue(extraction, 'financial.carParkRemoteDeposit')),
-    commencementDate: fieldValue(extraction, 'dates.commencementDate'),
-    expiryDate: fieldValue(extraction, 'dates.expiryDate'),
-    renewalReminder: fieldValue(extraction, 'dates.renewalReminder'),
+    commencementDate: formatExtractedNexoraDate(fieldValue(extraction, 'dates.commencementDate')),
+    expiryDate: formatExtractedNexoraDate(fieldValue(extraction, 'dates.expiryDate')),
+    renewalReminder: formatExtractedNexoraDate(fieldValue(extraction, 'dates.renewalReminder')),
     renewalOption: fieldValue(extraction, 'dates.renewalOption'),
     noticePeriod: fieldValue(extraction, 'dates.noticePeriod'),
     renewalHistory: fieldValue(extraction, 'clauses.renewalClause'),
@@ -689,11 +690,11 @@ function FiltersPanel({ filters, language, onChange }: { filters: Filters; langu
       </label>
       <label className="field">
         <span>{t.fromDate}</span>
-        <input value={filters.fromDate} placeholder="DD/MM/YYYY" onChange={(event) => onChange({ ...filters, fromDate: event.target.value })} />
+        <DateInput value={filters.fromDate} onValueChange={(fromDate) => onChange({ ...filters, fromDate })} />
       </label>
       <label className="field">
         <span>{t.toDate}</span>
-        <input value={filters.toDate} placeholder="DD/MM/YYYY" onChange={(event) => onChange({ ...filters, toDate: event.target.value })} />
+        <DateInput value={filters.toDate} onValueChange={(toDate) => onChange({ ...filters, toDate })} />
       </label>
     </div>
   );
@@ -759,9 +760,9 @@ function DocumentReview({
           <NumberField label={t.utilityDeposit} value={form.utilityDeposit} onChange={(value) => onChange({ ...form, utilityDeposit: value })} />
           <NumberField label={t.accessCardDeposit} value={form.accessCardDeposit} onChange={(value) => onChange({ ...form, accessCardDeposit: value })} />
           <NumberField label={t.carParkRemoteDeposit} value={form.carParkRemoteDeposit} onChange={(value) => onChange({ ...form, carParkRemoteDeposit: value })} />
-          <TextField label={t.commencementDate} value={form.commencementDate} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, commencementDate: value })} required />
-          <TextField label={t.expiryDate} value={form.expiryDate} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, expiryDate: value })} required />
-          <TextField label={t.renewalReminder} value={form.renewalReminder} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, renewalReminder: value })} />
+          <DateField label={t.commencementDate} value={form.commencementDate} onChange={(value) => onChange({ ...form, commencementDate: value })} required />
+          <DateField label={t.expiryDate} value={form.expiryDate} onChange={(value) => onChange({ ...form, expiryDate: value })} required />
+          <DateField label={t.renewalReminder} value={form.renewalReminder} onChange={(value) => onChange({ ...form, renewalReminder: value })} />
           <TextField label={t.renewalOption} value={form.renewalOption} onChange={(value) => onChange({ ...form, renewalOption: value })} />
           <TextField label={t.noticePeriod} value={form.noticePeriod} onChange={(value) => onChange({ ...form, noticePeriod: value })} />
           <TextArea label={t.specialClauses} value={form.specialClauses} onChange={(value) => onChange({ ...form, specialClauses: value })} />
@@ -799,6 +800,15 @@ function TextField({ label, value, onChange, wide = false, required = false, pla
     <label className={wide ? 'wide field' : 'field'}>
       <span>{label}{required ? ' *' : ''}</span>
       <input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function DateField({ label, value, onChange, required = false }: { label: string; value: string; onChange: (value: string) => void; required?: boolean }) {
+  return (
+    <label className="field">
+      <span>{label}{required ? ' *' : ''}</span>
+      <DateInput value={value} onValueChange={onChange} required={required} />
     </label>
   );
 }

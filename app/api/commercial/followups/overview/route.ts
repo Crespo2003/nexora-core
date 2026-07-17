@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../../lib/supabase/server';
+import { addDaysToIsoDate, currentIsoDate } from '../../../../../lib/dates/formatDate';
 
 export async function GET(request: Request) {
   try {
     const auth = await requireWorkspaceAccess(undefined, request);
     if (auth instanceof Response) return auth;
-    const now = new Date(); const iso = now.toISOString(); const today = iso.slice(0,10); const week = new Date(now.getTime()+7*86_400_000).toISOString(); const ago7=new Date(now.getTime()-7*86_400_000).toISOString(); const ago14=new Date(now.getTime()-14*86_400_000).toISOString(); const soon30=new Date(now.getTime()+30*86_400_000).toISOString().slice(0,10); const verify30=new Date(now.getTime()-30*86_400_000).toISOString().slice(0,10);
+    const now = new Date(); const iso = now.toISOString(); const today = currentIsoDate(now); const week = new Date(now.getTime()+7*86_400_000).toISOString(); const ago7=new Date(now.getTime()-7*86_400_000).toISOString(); const ago14=new Date(now.getTime()-14*86_400_000).toISOString(); const soon30=addDaysToIsoDate(today, 30) ?? today; const verify30=addDaysToIsoDate(today, -30) ?? today;
     const [followups,companies,proposals,viewings,deals,requirements,listings] = await Promise.all([
       auth.supabase.from('commercial_followups').select('*').eq('workspace_id',auth.workspaceId).eq('status','open').is('deleted_at',null).order('due_at'),
       auth.supabase.from('commercial_companies').select('id,legal_name,last_activity_at,updated_at,assigned_user_id').eq('workspace_id',auth.workspaceId).is('deleted_at',null).lt('updated_at',ago7),

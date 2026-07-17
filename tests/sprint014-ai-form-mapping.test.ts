@@ -74,10 +74,10 @@ test('4. utility deposits normalize to numeric values', () => {
   assert.equal(mapTenancyExtractionToForm(aiResponse()).generalUtilityDeposit, 1750);
 });
 
-test('5. tenancy dates convert to the HTML date input format', () => {
+test('5. tenancy dates convert to Nexora DD/MM/YYYY form values', () => {
   const mapped = mapTenancyExtractionToForm(aiResponse());
-  assert.equal(mapped.commencementDate, '2026-07-01');
-  assert.equal(mapped.expiryDate, '2028-06-30');
+  assert.equal(mapped.commencementDate, '01/07/2026');
+  assert.equal(mapped.expiryDate, '30/06/2028');
   assert.equal(normalizeDateForInput('31/02/2026'), '');
 });
 

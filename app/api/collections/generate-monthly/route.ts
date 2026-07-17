@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { generateMonthlyCollections } from '../../../../lib/collections/core';
 import type { SmartCollection, TenancySummary } from '../../../../lib/collections/types';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { currentIsoDate } from '../../../../lib/dates/formatDate';
 
 function cleanNumber(value: unknown) {
   const number = Number(value ?? 0);
@@ -131,7 +132,8 @@ export async function POST(request: Request) {
     }
     const tenancies = scopedTenancyRows.map((row) => tenancyFromRow(row as Record<string, unknown>));
     const existing = (collectionRows ?? []).map((row) => collectionFromRow(row as Record<string, unknown>));
-    const plan = generateMonthlyCollections(tenancies, existing, targetMonth, new Date().toISOString().slice(0, 10));
+    const todayIso = currentIsoDate();
+    const plan = generateMonthlyCollections(tenancies, existing, targetMonth, todayIso);
     const created = [];
 
     for (const item of plan.created) {
@@ -154,7 +156,7 @@ export async function POST(request: Request) {
           wifiAmount: utilityCharges.wifi_amount,
           aircondAmount: utilityCharges.aircond_amount,
           otherCharges: utilityCharges.other_charges,
-          paymentStatus: dueDate < new Date().toISOString().slice(0, 10) ? 'overdue' : 'pending'
+          paymentStatus: dueDate < todayIso ? 'overdue' : 'pending'
         }
       });
 

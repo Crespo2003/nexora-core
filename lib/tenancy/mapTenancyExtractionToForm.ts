@@ -1,4 +1,5 @@
 import type { TenancyLegalIntelligence } from '../ai/extractTenancy';
+import { formatExtractedNexoraDate, normalizeDateForStorage } from '../dates/formatDate';
 import type { TenancyExtraction } from './parser';
 
 export type MappedMoney = number | '';
@@ -206,17 +207,7 @@ function normalizeExtractedMoney(
 }
 
 export function normalizeDateForInput(input: string): string {
-  const raw = input.trim();
-  if (!raw) return '';
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return validDate(iso[1], iso[2], iso[3]) ? raw : '';
-  const numeric = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-  if (numeric) return validDate(numeric[3], numeric[2], numeric[1])
-    ? `${numeric[3]}-${numeric[2].padStart(2, '0')}-${numeric[1].padStart(2, '0')}` : '';
-  const named = raw.toLowerCase().match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\s+(\d{4})$/);
-  const month = named ? months[named[2]] : undefined;
-  return named && month && validDate(named[3], month, named[1])
-    ? `${named[3]}-${month}-${named[1].padStart(2, '0')}` : '';
+  return formatExtractedNexoraDate(input);
 }
 
 export function normalizeMalaysianPhone(input: string): string {
@@ -316,14 +307,3 @@ function formFieldForExtractionPath(path: string): keyof TenancyMappedForm | und
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
-
-function validDate(year: string, month: string, day: string): boolean {
-  const date = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.getUTCFullYear() === Number(year)
-    && date.getUTCMonth() + 1 === Number(month) && date.getUTCDate() === Number(day);
-}
-
-const months: Record<string, string> = {
-  january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
-  july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
-};

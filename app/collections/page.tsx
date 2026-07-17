@@ -6,6 +6,8 @@ import type { CollectionOverview, CollectionOverviewRow } from '../../lib/collec
 import type { Language } from '../../lib/collections/types';
 import { formatMYR } from '../../lib/formatters';
 import { defaultLanguage, languageStorageKey } from '../../lib/i18n/translations';
+import { DateInput } from '../../lib/dates/DateInput';
+import { currentIsoDate, currentIsoMonth, formatNexoraDate, normalizeDateForStorage } from '../../lib/dates/formatDate';
 
 type UiLanguage = Exclude<Language, 'bilingual'>;
 type ViewKey = 'dashboard' | 'followups' | 'accounts' | 'upload' | 'payment' | 'reminder' | 'landlord' | 'detail';
@@ -30,7 +32,7 @@ type Filters = {
   search: string;
 };
 
-const currentMonth = new Date().toISOString().slice(0, 7);
+const currentMonth = currentIsoMonth();
 
 const copy = {
   en: {
@@ -126,7 +128,7 @@ export default function CollectionsPage() {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [overview, setOverview] = useState<CollectionOverview | null>(null);
-  const [todayIso, setTodayIso] = useState(new Date().toISOString().slice(0, 10));
+  const [todayIso, setTodayIso] = useState(currentIsoDate());
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [operationId, setOperationId] = useState('');
@@ -136,7 +138,7 @@ export default function CollectionsPage() {
   const [landlordDraft, setLandlordDraft] = useState('');
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
-    paymentDate: new Date().toISOString().slice(0, 10),
+    paymentDate: formatNexoraDate(currentIsoDate()),
     paymentMethod: 'bank_transfer',
     transactionType: 'payment',
     paymentReference: '',
@@ -242,8 +244,11 @@ export default function CollectionsPage() {
       if (filters.status !== 'all' && row.status !== filters.status) return false;
       if (filters.overdue === 'overdue' && row.status !== 'overdue' && row.status !== 'partial') return false;
       if (filters.provider !== 'all' && !row.accounts.some((account) => account.provider === filters.provider)) return false;
-      if (filters.dueFrom && row.collection.dueDate < filters.dueFrom) return false;
-      if (filters.dueTo && row.collection.dueDate > filters.dueTo) return false;
+      const dueDate = normalizeDateForStorage(row.collection.dueDate);
+      const dueFrom = normalizeDateForStorage(filters.dueFrom);
+      const dueTo = normalizeDateForStorage(filters.dueTo);
+      if (dueFrom && (!dueDate || dueDate < dueFrom)) return false;
+      if (dueTo && (!dueDate || dueDate > dueTo)) return false;
       if (filters.assignedAgent && !row.tenancy.assignedAgent.toLowerCase().includes(filters.assignedAgent.toLowerCase())) return false;
       if (query && !haystack.includes(query)) return false;
       return true;
@@ -510,8 +515,8 @@ function FiltersPanel({ filters, language, onChange }: { filters: Filters; langu
       <SelectField label={language === 'zh' ? '付款状态' : 'Payment status'} value={filters.status} options={['all', 'pending', 'due', 'paid', 'partial', 'outstanding', 'overdue', 'waived', 'disputed']} onChange={(value) => onChange({ ...filters, status: value })} />
       <SelectField label={language === 'zh' ? '逾期状态' : 'Overdue status'} value={filters.overdue} options={['all', 'overdue']} onChange={(value) => onChange({ ...filters, overdue: value })} />
       <SelectField label={language === 'zh' ? '水电供应商' : 'Utility provider'} value={filters.provider} options={['all', 'tnb', 'water', 'iwk', 'wifi', 'aircond', 'other']} onChange={(value) => onChange({ ...filters, provider: value })} />
-      <Field label={language === 'zh' ? '到期日起' : 'Due from'} value={filters.dueFrom} onChange={(value) => onChange({ ...filters, dueFrom: value })} />
-      <Field label={language === 'zh' ? '到期日至' : 'Due to'} value={filters.dueTo} onChange={(value) => onChange({ ...filters, dueTo: value })} />
+        <DateField label={language === 'zh' ? '到期日起' : 'Due from'} value={filters.dueFrom} onChange={(value) => onChange({ ...filters, dueFrom: value })} />
+        <DateField label={language === 'zh' ? '到期日至' : 'Due to'} value={filters.dueTo} onChange={(value) => onChange({ ...filters, dueTo: value })} />
       <Field label={language === 'zh' ? '负责中介' : 'Assigned agent'} value={filters.assignedAgent} onChange={(value) => onChange({ ...filters, assignedAgent: value })} />
       <Field label={language === 'zh' ? '搜索' : 'Search'} value={filters.search} onChange={(value) => onChange({ ...filters, search: value })} wide />
     </div>
@@ -613,7 +618,7 @@ function PaymentPanel({ language, selectedRow, form, setForm, onSave, busy }: { 
       <div className="section-title"><div><p className="eyebrow">{language === 'zh' ? '记录付款' : 'Payment Recording'}</p><h2>{selectedRow.tenancy.tenant}</h2></div></div>
       <div className="form-grid">
         <Field label={language === 'zh' ? '金额' : 'Amount'} value={form.amount} onChange={(value) => setForm({ ...form, amount: value })} />
-        <Field label={language === 'zh' ? '付款日期' : 'Payment date'} value={form.paymentDate} onChange={(value) => setForm({ ...form, paymentDate: value })} />
+        <DateField label={language === 'zh' ? '付款日期' : 'Payment date'} value={form.paymentDate} onChange={(value) => setForm({ ...form, paymentDate: value })} />
         <SelectField label={language === 'zh' ? '付款方式' : 'Payment method'} value={form.paymentMethod} options={['bank_transfer', 'cash', 'duitnow', 'touch_n_go', 'cheque', 'online_banking', 'other']} onChange={(value) => setForm({ ...form, paymentMethod: value })} />
         <SelectField label={language === 'zh' ? '交易类型' : 'Transaction type'} value={form.transactionType} options={['payment', 'adjustment', 'waiver', 'refund', 'reversal']} onChange={(value) => setForm({ ...form, transactionType: value })} />
         <Field label={language === 'zh' ? '银行参考' : 'Bank reference'} value={form.paymentReference} onChange={(value) => setForm({ ...form, paymentReference: value })} />
@@ -679,6 +684,10 @@ function ActivityPanel({ row, language }: { row: CollectionOverviewRow; language
 
 function Field({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
   return <label className={wide ? 'wide field' : 'field'}><span>{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function DateField({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
+  return <label className={wide ? 'wide field' : 'field'}><span>{label}</span><DateInput value={value} onValueChange={onChange} /></label>;
 }
 
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {

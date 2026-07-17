@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { extractUtilityBill } from '../../../../lib/collections/core';
+import { currentIsoMonth } from '../../../../lib/dates/formatDate';
 import { extractDocumentText } from '../../../../lib/documents/extractText';
 import { inferMimeTypeFromName, validateExtensionMatchesMime, validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { maxDocumentUploadBytes } from '../../../../lib/documents/types';
@@ -113,7 +114,7 @@ export async function POST(request: Request) {
     const reviewedProvider = extraction.provider === 'not_detected' ? provider : extraction.provider;
     const billMonth = normalizeBillMonth(extraction.billingPeriod, normalizeExtractedDate(extraction.billDate))
       || collectionMonth.slice(0, 7)
-      || new Date().toISOString().slice(0, 7);
+      || currentIsoMonth();
 
     const documentInsert = await supabase
       .from('documents')

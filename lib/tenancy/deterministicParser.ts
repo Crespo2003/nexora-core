@@ -1,4 +1,4 @@
-import { displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
+import { currentIsoDate, displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
 import { applyRiskEngine, type TenancyLegalIntelligence } from '../ai/extractTenancy';
 import type { Confidence, ExtractedField, TenancyExtraction, TenancyExtractionFallbackReason } from './parser';
 
@@ -72,7 +72,7 @@ export function extractTenancyDeterministically(
     property, landlord, tenant, financial, dates, clauses,
     document: {
       originalFilename,
-      uploadDate: isoToDisplayDate(new Date().toISOString().slice(0, 10)),
+      uploadDate: isoToDisplayDate(currentIsoDate()),
       documentType: mimeType.includes('pdf') ? 'PDF Tenancy Agreement' : mimeType.includes('wordprocessing') ? 'DOCX Tenancy Agreement' : 'TXT Tenancy Agreement',
       extractionStatus: text.length >= 80 ? 'ready' : 'unreadable',
       extractionConfidence: overall,

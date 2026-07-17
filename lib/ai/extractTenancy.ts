@@ -4,6 +4,7 @@ import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
 import { logExtractionDiagnostic } from './extractionDiagnostics';
+import { formatNexoraDate } from '../dates/formatDate';
 import {
   canonicalTenancyExtractionSchema,
   parseOpenAITenancyResponse,
@@ -770,11 +771,7 @@ function formatMoney(value: number): string {
 }
 
 function formatSummaryDate(value: string): string {
-  if (!value) return '';
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-MY', {
-    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'
-  }).format(date);
+  return formatNexoraDate(value);
 }
 
 function tenancyDuration(start: string, end: string): string {

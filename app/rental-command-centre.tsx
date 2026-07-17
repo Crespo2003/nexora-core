@@ -6,8 +6,10 @@ import {
   currentIsoDate,
   currentIsoMonth,
   isoMonthToDisplayMonth,
-  isoToDisplayDate
+  isoToDisplayDate,
+  normalizeDateForStorage
 } from '../lib/dates/formatDate';
+import { DateInput } from '../lib/dates/DateInput';
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
@@ -292,7 +294,8 @@ function cleanNumber(value: unknown): number {
 function toPaymentStatus(totalDue: number, amountPaid: number, dueDate: string): PaymentStatus {
   if (amountPaid >= totalDue) return 'paid';
   if (amountPaid > 0) return 'partial';
-  if (new Date(`${dueDate}T00:00:00`) < new Date(`${todayIso}T00:00:00`)) return 'overdue';
+  const dueDateIso = normalizeDateForStorage(dueDate);
+  if (dueDateIso && dueDateIso < todayIso) return 'overdue';
   return 'outstanding';
 }
 
@@ -445,11 +448,11 @@ function tenancyPayload(form: TenancyForm) {
     access_card_deposit: moneyForPersistence(form.accessCardDeposit),
     car_park_remote_deposit: moneyForPersistence(form.carParkRemoteDeposit),
     rental_due_day: Number(form.paymentDueDay) || 1,
-    commencement_date: normalizeDateForInput(form.commencementDate) || null,
-    expiry_date: normalizeDateForInput(form.expiryDate) || null,
+    commencement_date: normalizeDateForStorage(form.commencementDate),
+    expiry_date: normalizeDateForStorage(form.expiryDate),
     renewal_option: form.renewalOption.trim(),
     notice_period: form.noticePeriod.trim(),
-    renewal_reminder: normalizeDateForInput(form.renewalReminder) || null,
+    renewal_reminder: normalizeDateForStorage(form.renewalReminder),
     signed_ta: form.signedTa.trim(),
     renewal_history: form.renewalHistory.trim(),
     special_clauses: form.specialClauses.trim(),
@@ -548,12 +551,12 @@ function validateForm(form: TenancyForm, tenancies: Tenancy[], editingId: string
   });
 
   if (!form.commencementDate) errors.commencementDate = t.errors.dateRequired;
-  else if (!normalizeDateForInput(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
+  else if (!normalizeDateForStorage(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
 
   if (!form.expiryDate) errors.expiryDate = t.errors.dateRequired;
-  else if (!normalizeDateForInput(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
+  else if (!normalizeDateForStorage(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
 
-  if (form.renewalReminder && !normalizeDateForInput(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
+  if (form.renewalReminder && !normalizeDateForStorage(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
 
   const termCompare = compareIsoDates(form.expiryDate, form.commencementDate);
   if (termCompare !== null && termCompare <= 0) errors.expiryDate = t.errors.expiryAfterCommencement;
@@ -588,8 +591,8 @@ function reviewedValues(form: TenancyForm): Record<string, string | number> {
 }
 
 function compareIsoDates(left: string, right: string): number | null {
-  const leftIso = normalizeDateForInput(left);
-  const rightIso = normalizeDateForInput(right);
+  const leftIso = normalizeDateForStorage(left);
+  const rightIso = normalizeDateForStorage(right);
   return leftIso && rightIso ? leftIso.localeCompare(rightIso) : null;
 }
 
@@ -1496,7 +1499,9 @@ function Field({
   return (
     <label className={wide ? 'wide field' : 'field'}>
       <span>{label}{required ? ' *' : ''}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      <input type={type} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      {type === 'date'
+        ? <DateInput value={value} required={required} placeholder={placeholder || 'DD/MM/YYYY'} onValueChange={onChange} />
+        : <input type={type} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />}
       {error && <em>{error}</em>}
     </label>
   );

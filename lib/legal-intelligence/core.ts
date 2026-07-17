@@ -1,3 +1,5 @@
+import { formatNexoraDate } from '../dates/formatDate';
+
 export const clauseCategories = [
   'Rental payment', 'Late payment', 'Security deposit', 'Utility deposit', 'Access card deposit', 'Car park deposit',
   'Renewal', 'Notice period', 'Termination', 'Early termination', 'Default', 'Viewing rights', 'Entry and inspection',
@@ -427,7 +429,7 @@ function financialValue(result: LegalIntelligenceResult, key: string): string {
 
 function dateValue(result: LegalIntelligenceResult, key: string): string {
   if (result.normalized_fields[key]) return result.normalized_fields[key];
-  const match = result.executive_summary.match(key === 'commencement_date' ? /from ([A-Z][a-z]+ \d{1,2}, \d{4})/ : / to ([A-Z][a-z]+ \d{1,2}, \d{4})/);
+  const match = result.executive_summary.match(key === 'commencement_date' ? /from (\d{2}\/\d{2}\/\d{4})/ : / to (\d{2}\/\d{2}\/\d{4})/);
   return match?.[1] ?? '';
 }
 
@@ -440,8 +442,8 @@ function normalizedFields(facts: Facts): Record<string, string> {
     utility_deposit: money(financial.utility_deposit) ? `RM${formatMoney(money(financial.utility_deposit))}` : '',
     access_card_deposit: money(financial.access_card_deposit) ? `RM${formatMoney(money(financial.access_card_deposit))}` : '',
     car_park_deposit: money(financial.car_park_deposit) ? `RM${formatMoney(money(financial.car_park_deposit))}` : '',
-    commencement_date: text(tenancy.commencement_date),
-    expiry_date: text(tenancy.expiry_date),
+    commencement_date: formatNexoraDate(text(tenancy.commencement_date)),
+    expiry_date: formatNexoraDate(text(tenancy.expiry_date)),
     payment_due_day: text(tenancy.payment_due_day),
     renewal_option: text(tenancy.renewal_option),
     notice_period: text(tenancy.notice_period),
@@ -615,11 +617,7 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}_${(hash >>> 0).toString(36)}`;
 }
 
-function formatDate(value: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-MY', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
-}
+function formatDate(value: string): string { return formatNexoraDate(value); }
 
 function formatMoney(value: number): string {
   return new Intl.NumberFormat('en-MY', { maximumFractionDigits: 2 }).format(value);

@@ -6,6 +6,7 @@ import {
   resolveCollectionStatus,
   urgencyLevel
 } from './core';
+import { addDaysToIsoDate } from '../dates/formatDate';
 import type { CollectionPayment, Language, SmartCollection, TenancySummary, UtilityAccount, UtilityProvider } from './types';
 
 export type CollectionOverviewInput = {
@@ -212,9 +213,7 @@ export function buildCollectionOverview(input: CollectionOverviewInput): Collect
 
   const collectedThisMonth = rows.reduce((sum, row) => sum + row.paid, 0);
   const outstandingThisMonth = rows.reduce((sum, row) => sum + row.outstanding, 0);
-  const dueWithin3Date = new Date(`${input.todayIso}T00:00:00`);
-  dueWithin3Date.setDate(dueWithin3Date.getDate() + 3);
-  const dueWithin3Iso = dueWithin3Date.toISOString().slice(0, 10);
+  const dueWithin3Iso = addDaysToIsoDate(input.todayIso, 3) ?? input.todayIso;
   const monthStart = `${input.month}-01`;
   const activeTenancies = tenancies.filter((tenancy) => tenancy.status === 'active');
 
@@ -241,8 +240,4 @@ export function buildCollectionOverview(input: CollectionOverviewInput): Collect
   };
 }
 
-function addDays(isoDate: string, days: number) {
-  const date = new Date(`${isoDate}T00:00:00`);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
+function addDays(isoDate: string, days: number) { return addDaysToIsoDate(isoDate, days) ?? isoDate; }

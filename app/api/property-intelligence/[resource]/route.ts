@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { haversineDistanceKm, estimateTravelMinutes } from '../../../../lib/property-intelligence/calculations';
 import { allowedPropertyChanges, propertyResource, propertyResources } from '../../../../lib/property-intelligence/resources';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { normalizeDateForStorage } from '../../../../lib/dates/formatDate';
 
 const writeRoles = ['owner', 'admin', 'manager', 'agent'] as const;
 
@@ -51,7 +52,7 @@ async function mutate(request: Request, { params }: { params: { resource: string
       return NextResponse.json({ success: true, id });
     }
 
-    let changes = allowedPropertyChanges(resource, payload);
+    let changes = normalizePropertyDates(allowedPropertyChanges(resource, payload));
     if (operation === 'create' && resource === 'analyses') changes = await sourceAnalysis(auth, payload);
     if (operation === 'create' && resource !== 'analyses') changes = await enrichChild(auth, resource, changes);
     const validation = validate(resource, changes, operation);
@@ -113,4 +114,11 @@ function validate(resource: 'analyses' | 'comparables' | 'nearby', changes: Reco
 }
 function number(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) && parsed > 0 ? parsed : null; }
 function finiteNumber(value: unknown) { if (value === '' || value === null || value === undefined) return null; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
+function normalizePropertyDates(changes: Record<string, unknown>) {
+  if (!('transaction_date' in changes)) return changes;
+  const transactionDate = changes.transaction_date;
+  if (transactionDate === '' || transactionDate === null) return { ...changes, transaction_date: null };
+  const normalized = normalizeDateForStorage(transactionDate);
+  return normalized ? { ...changes, transaction_date: normalized } : Object.fromEntries(Object.entries(changes).filter(([key]) => key !== 'transaction_date'));
+}
 function errorResponse(status: number, error: string) { return NextResponse.json({ success: false, error }, { status, headers: { 'Cache-Control': 'private, no-store, max-age=0' } }); }

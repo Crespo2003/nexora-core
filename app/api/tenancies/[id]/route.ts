@@ -4,6 +4,7 @@ import { sortTimeline, titleForActivity } from '../../../../lib/tenancy-workspac
 import type { DocumentRecord, TimelineEvent } from '../../../../lib/tenancy-workspace/types';
 import { buildWorkspaceWarnings, tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { currentIsoDate, normalizeDateForStorage } from '../../../../lib/dates/formatDate';
 
 const editableTenancyFields = new Set([
   'tenant', 'tenant_id_no', 'tenant_phone', 'tenant_email', 'tenant_nationality',
@@ -15,6 +16,7 @@ const editableTenancyFields = new Set([
   'car_park_remote_deposit', 'rental_due_day', 'expiry_date', 'renewal_reminder', 'renewal_option',
   'notice_period', 'special_clauses', 'notes', 'status'
 ]);
+const editableDateFields = new Set(['tenant_identity_expiry', 'move_in_date', 'insurance_expiry', 'commencement_date', 'expiry_date', 'renewal_reminder']);
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   try {
@@ -101,10 +103,11 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     const currentCollection = collections[0] ?? null;
     const documentTypes = new Set(documents.map((document) => document.document_type));
     const expectedDocumentTypes = ['tenancy_agreement', 'identity_document', 'inventory_list'];
-    const today = new Date();
-    const expiryDays = Math.ceil((Date.parse(`${String(tenancyResult.data.expiry_date)}T00:00:00Z`) - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / 86_400_000);
+    const todayIso = currentIsoDate();
+    const startOfToday = Date.parse(`${todayIso}T00:00:00Z`);
+    const expiryDays = Math.ceil((Date.parse(`${String(tenancyResult.data.expiry_date)}T00:00:00Z`) - startOfToday) / 86_400_000);
     const reminderDays = tenancyResult.data.renewal_reminder
-      ? Math.ceil((Date.parse(`${String(tenancyResult.data.renewal_reminder)}T00:00:00Z`) - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / 86_400_000)
+      ? Math.ceil((Date.parse(`${String(tenancyResult.data.renewal_reminder)}T00:00:00Z`) - startOfToday) / 86_400_000)
       : Number.POSITIVE_INFINITY;
     const dashboard = {
       rentalDue: Number(currentCollection?.rental_amount ?? tenancyResult.data.monthly_rental ?? 0),
@@ -286,9 +289,13 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       });
     }
 
-    const changes = Object.fromEntries(
-      Object.entries(payload.changes ?? {}).filter(([key]) => editableTenancyFields.has(key))
-    );
+    const changes = Object.fromEntries(Object.entries(payload.changes ?? {}).flatMap(([key, value]) => {
+      if (!editableTenancyFields.has(key)) return [];
+      if (!editableDateFields.has(key)) return [[key, value]];
+      if (value === null || value === '') return [[key, null]];
+      const normalized = normalizeDateForStorage(value);
+      return normalized ? [[key, normalized]] : [];
+    }));
     if (!Object.keys(changes).length) {
       return NextResponse.json({ error: 'no-valid-fields' }, { status: 400 });
     }
