@@ -15,11 +15,20 @@ export type LegalRiskSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type LegalRisk = {
   code: string;
   severity: LegalRiskSeverity;
+  category: string;
   reason: string;
   recommendation: string;
+  source_page: number | null;
+  source_excerpt: string;
 };
 
 export type FieldConfidence = Record<string, number>;
+export type FieldEvidence = Record<string, {
+  value: string;
+  confidence: number;
+  source_page: number | null;
+  source_excerpt: string;
+}>;
 
 export type TenancyLegalIntelligence = {
   document_type: string;
@@ -74,6 +83,7 @@ export type TenancyLegalIntelligence = {
   risks: LegalRisk[];
   warnings: string[];
   field_confidence: FieldConfidence;
+  field_evidence: FieldEvidence;
 };
 
 export type TenancyDocumentInput = {
@@ -127,12 +137,26 @@ const partySchema = {
 const legalRiskSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['code', 'severity', 'reason', 'recommendation'],
+  required: ['code', 'severity', 'category', 'reason', 'recommendation', 'source_page', 'source_excerpt'],
   properties: {
     code: stringSchema,
     severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+    category: stringSchema,
     reason: stringSchema,
-    recommendation: stringSchema
+    recommendation: stringSchema,
+    source_page: { type: ['integer', 'null'], minimum: 1 },
+    source_excerpt: stringSchema
+  }
+} as const;
+const fieldEvidenceItemSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['value', 'confidence', 'source_page', 'source_excerpt'],
+  properties: {
+    value: stringSchema,
+    confidence: { type: 'number', minimum: 0, maximum: 100 },
+    source_page: { type: ['integer', 'null'], minimum: 1 },
+    source_excerpt: stringSchema
   }
 } as const;
 
@@ -141,7 +165,7 @@ export const tenancyLegalIntelligenceSchema = {
   additionalProperties: false,
   required: [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ],
   properties: {
     document_type: stringSchema,
@@ -200,6 +224,13 @@ export const tenancyLegalIntelligenceSchema = {
       additionalProperties: false,
       required: confidencePaths,
       properties: Object.fromEntries(confidencePaths.map((path) => [path, { type: 'number', minimum: 0, maximum: 100 }]))
+    },
+    field_evidence: {
+      type: 'object',
+      description: 'Value, confidence, source page and verbatim source excerpt for every extracted field.',
+      additionalProperties: false,
+      required: confidencePaths,
+      properties: Object.fromEntries(confidencePaths.map((path) => [path, fieldEvidenceItemSchema]))
     }
   }
 } as const;
@@ -216,6 +247,8 @@ Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
 Populate field_confidence with a 0-100 percentage for every extracted scalar and array field using its dot path, for example tenant.name, financial.monthly_rental, legal.witnesses and special_clauses. Use 0 for absent fields.
+Populate field_evidence for every field path. Value must match the normalized extracted value, source_page must use the nearest --- PAGE N --- marker or null when pages are unavailable, and source_excerpt must be a short verbatim excerpt from the document. Empty fields must have confidence 0, source_page null, and an empty source_excerpt.
+Every risk must include a category and the supporting source page and verbatim excerpt when the issue is based on a clause. Missing-clause risks must use null and an empty excerpt.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
 Return only the requested JSON schema.`;
@@ -283,7 +316,7 @@ export async function extractTenancyText(
       fetcher: options.fetcher,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
-  const normalized = normalizeExtraction(reconciled);
+  const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
   const extraction = applyRiskEngine(normalized, normalizedText);
 
   return {
@@ -342,7 +375,10 @@ export function applyRiskEngine(
   if (!/maintain|maintenance|repair|upkeep|penyelenggaraan|pembaikan/.test(text)) addRisk(risks, 'missing_maintenance_clause', 'medium', 'No maintenance or repair allocation was detected.', 'Define landlord and tenant maintenance responsibilities and approval thresholds.');
 
   const rentalValues = extractRentalAmounts(rawText);
-  if (new Set(rentalValues.map((value) => value.toFixed(2))).size > 1) addRisk(risks, 'rental_inconsistency', 'high', 'Conflicting monthly rental amounts were detected.', 'Verify the operative rental amount across the body, schedules, and payment clauses.');
+  if (new Set(rentalValues.map((value) => value.toFixed(2))).size > 1) {
+    addRisk(risks, 'rental_inconsistency', 'high', 'Conflicting monthly rental amounts were detected.', 'Verify the operative rental amount across the body, schedules, and payment clauses.', 'financial');
+    warnings.push('Conflicting monthly rental values require manual review.');
+  }
 
   const expectedSecurityMonths = extractDepositMonths(rawText, 'security');
   if (expectedSecurityMonths !== null && extraction.financial.monthly_rental > 0) {
@@ -355,10 +391,22 @@ export function applyRiskEngine(
     if (Math.abs(expected - extraction.financial.utility_deposit) > 1) addRisk(risks, 'utility_deposit_mismatch', 'high', 'The utility deposit amount does not match the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount before signing.');
   }
 
-  if (/evict.{0,80}without (?:a )?court|enter.{0,80}without (?:prior )?notice|forfeit.{0,80}without notice|waive.{0,80}(?:legal|statutory) rights?/.test(text)) {
-    addRisk(risks, 'potentially_illegal_clause', 'critical', 'A potentially unlawful or unenforceable clause may permit self-help eviction, unannounced entry, automatic forfeiture, or waiver of statutory rights.', 'Obtain Malaysian legal advice and revise the clause before relying on it.');
+  const unusualClause = findSourceExcerpt(rawText, /evict.{0,80}without (?:a )?court|enter.{0,80}without (?:prior )?notice|forfeit.{0,80}without notice|waive.{0,80}(?:legal|statutory) rights?/i);
+  if (unusualClause.excerpt) {
+    addRisk(risks, 'unusual_forfeiture_or_entry_clause', 'critical', 'A potentially unusual, unlawful, or unenforceable forfeiture, eviction, entry, or rights-waiver clause was detected.', 'Obtain Malaysian legal advice and revise the clause before relying on it.', 'forfeiture_and_access', unusualClause.page, unusualClause.excerpt);
   }
-  if (hasConflictingDates(extraction, rawText)) addRisk(risks, 'conflicting_dates', 'high', 'Conflicting or chronologically invalid tenancy dates were detected.', 'Reconcile commencement, term, and expiry dates throughout the agreement.');
+  if (hasConflictingDates(extraction, rawText)) {
+    addRisk(risks, 'conflicting_dates', 'high', 'Conflicting tenancy dates were detected.', 'Reconcile commencement, term, and expiry dates throughout the agreement.', 'tenancy_period');
+    warnings.push('Conflicting tenancy dates require manual review.');
+  }
+  if (hasInvalidTenancyPeriod(extraction)) addRisk(risks, 'invalid_tenancy_period', 'high', 'The expiry date is not later than the commencement date.', 'Correct the commencement and expiry dates before confirming the tenancy.', 'tenancy_period');
+  if (isAmbiguousNoticePeriod(extraction.tenancy.notice_period)) addRisk(risks, 'ambiguous_notice_period', 'medium', 'The notice period is missing or does not state a clear number and time unit.', 'Confirm the required notice duration and whether it is measured in days or months.', 'termination');
+  if (!/(?:tenant|landlord|lessee|lessor|penyewa|tuan rumah)[\s\S]{0,120}(?:tnb|electric|water|iwk|wifi|utilities|utilit|air|elektrik)/i.test(rawText)) {
+    addRisk(risks, 'unclear_utility_responsibility', 'medium', 'Responsibility for utilities is not clearly allocated between the parties.', 'State which party pays and manages each utility account.', 'utilities');
+  }
+  if (!/(?:tenant|landlord|lessee|lessor|penyewa|tuan rumah)[\s\S]{0,120}(?:repair|maintain|maintenance|pembaikan|penyelenggaraan)/i.test(rawText)) {
+    addRisk(risks, 'unclear_repair_responsibility', 'medium', 'Repair and maintenance responsibility is not clearly allocated between the parties.', 'Define responsibility for routine, structural, emergency, and damage-related repairs.', 'maintenance');
+  }
   if (!extraction.tenancy.commencement_date) warnings.push('Commencement date was not reliably detected.');
   if (!extraction.tenancy.expiry_date) warnings.push('Expiry date was not reliably detected.');
   if (extraction.confidence < 0.75) warnings.push('Overall extraction confidence is below 75%; verify against the source document.');
@@ -433,8 +481,8 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     landlord: party(source.landlord),
     property: {
       name: text(source.property?.name), unit: text(source.property?.unit), address: text(source.property?.address),
-      type: normalizePropertyType(text(source.property?.type)), build_up: text(source.property?.build_up),
-      land_area: text(source.property?.land_area), car_parks: text(source.property?.car_parks)
+      type: normalizePropertyType(text(source.property?.type)), build_up: normalizeArea(text(source.property?.build_up)),
+      land_area: normalizeArea(text(source.property?.land_area)), car_parks: text(source.property?.car_parks)
     },
     financial: {
       monthly_rental: money(source.financial?.monthly_rental), security_deposit: money(source.financial?.security_deposit),
@@ -444,7 +492,7 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     tenancy: {
       commencement_date: normalizeDate(text(source.tenancy?.commencement_date)),
       expiry_date: normalizeDate(text(source.tenancy?.expiry_date)),
-      renewal_option: text(source.tenancy?.renewal_option), notice_period: text(source.tenancy?.notice_period),
+      renewal_option: normalizePercentages(text(source.tenancy?.renewal_option)), notice_period: normalizeNoticePeriod(text(source.tenancy?.notice_period)),
       payment_due_day: normalizePaymentDay(text(source.tenancy?.payment_due_day))
     },
     utilities: {
@@ -455,15 +503,16 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
       signatures: text(source.legal?.signatures), witnesses: text(source.legal?.witnesses),
       stamp_duty: text(source.legal?.stamp_duty), inventory: text(source.legal?.inventory),
       restrictions: uniqueStrings(source.legal?.restrictions ?? []),
-      late_payment: text(source.legal?.late_payment), termination: text(source.legal?.termination),
+      late_payment: normalizePercentages(text(source.legal?.late_payment)), termination: normalizeNoticeText(text(source.legal?.termination)),
       viewing_rights: text(source.legal?.viewing_rights), insurance: text(source.legal?.insurance),
       maintenance: text(source.legal?.maintenance), access_card: text(source.legal?.access_card),
       car_park: text(source.legal?.car_park)
     },
-    special_clauses: uniqueStrings(source.special_clauses ?? []),
+    special_clauses: uniqueStrings(source.special_clauses ?? []).map(normalizePercentages),
     risks: uniqueRisks(source.risks ?? []),
     warnings: uniqueStrings(source.warnings ?? []),
-    field_confidence: normalizeFieldConfidence(source.field_confidence, source)
+    field_confidence: normalizeFieldConfidence(source.field_confidence, source),
+    field_evidence: normalizeFieldEvidence(source.field_evidence, source, source.field_confidence)
   };
 }
 
@@ -490,6 +539,98 @@ function normalizeFieldConfidence(value: FieldConfidence | undefined, source: Te
   return result;
 }
 
+function normalizeArea(value: string): string {
+  return value.replace(/\b(?:square\s+feet|square\s+foot|sq\.?\s*ft\.?)\b/gi, 'sq ft')
+    .replace(/\b(?:square\s+metres?|square\s+meters?|sq\.?\s*m\.?)\b/gi, 'sq m').replace(/\s+/g, ' ').trim();
+}
+
+function normalizePercentages(value: string): string {
+  return value.replace(/(\d+(?:\.\d+)?)\s*(?:percent|per cent)/gi, '$1%').replace(/\s+%/g, '%');
+}
+
+function normalizeNoticePeriod(value: string): string {
+  if (!value) return '';
+  const normalized = normalizeNoticeText(value);
+  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(day|week|month|year)s?/i);
+  return match ? `${Number(match[1])} ${match[2].toLowerCase()}${Number(match[1]) === 1 ? '' : 's'}` : normalized;
+}
+
+function normalizeNoticeText(value: string): string {
+  const words: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12' };
+  return Object.entries(words).reduce((current, [word, number]) => current.replace(new RegExp(`\\b${word}(?:\\s*\\(${number}\\))?\\b`, 'gi'), number), value)
+    .replace(/\b(\d+)\s*\(\1\)/g, '$1').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeFieldEvidence(value: FieldEvidence | undefined, source: TenancyLegalIntelligence, confidence: FieldConfidence | undefined): FieldEvidence {
+  const result: FieldEvidence = {};
+  for (const path of confidencePaths) {
+    const present = hasPathValue(source, path);
+    const supplied = value?.[path];
+    const score = Number(supplied?.confidence ?? confidence?.[path]);
+    result[path] = {
+      value: present ? serializePathValue(source, path) : '',
+      confidence: present && Number.isFinite(score) ? Math.round(Math.min(100, Math.max(0, score))) : present ? 50 : 0,
+      source_page: present && Number.isInteger(supplied?.source_page) && Number(supplied?.source_page) > 0 ? Number(supplied?.source_page) : null,
+      source_excerpt: present ? String(supplied?.source_excerpt ?? '').replace(/\s+/g, ' ').trim().slice(0, 500) : ''
+    };
+  }
+  return result;
+}
+
+function validateFieldEvidence(extraction: TenancyLegalIntelligence, rawText: string): TenancyLegalIntelligence {
+  const normalizedSource = rawText.replace(/\s+/g, ' ').toLowerCase();
+  const evidence: FieldEvidence = {};
+  const warnings = [...extraction.warnings];
+  for (const path of confidencePaths) {
+    const item = extraction.field_evidence[path];
+    const value = serializePathValue(extraction, path);
+    const present = hasPathValue(extraction, path);
+    const excerpt = item?.source_excerpt.replace(/\s+/g, ' ').trim() ?? '';
+    const excerptSupported = Boolean(excerpt) && normalizedSource.includes(excerpt.toLowerCase());
+    if (excerpt && !excerptSupported) warnings.push(`Source excerpt for ${path} could not be verified against the extracted document text.`);
+    evidence[path] = {
+      value: present ? value : '',
+      confidence: present ? Math.min(item?.confidence ?? extraction.field_confidence[path] ?? 50, excerptSupported ? 100 : 79) : 0,
+      source_page: present && excerptSupported ? sourcePageForExcerpt(rawText, excerpt) : null,
+      source_excerpt: present && excerptSupported ? excerpt : ''
+    };
+  }
+  const risks = extraction.risks.map((risk) => {
+    const excerpt = risk.source_excerpt.replace(/\s+/g, ' ').trim();
+    const supported = Boolean(excerpt) && normalizedSource.includes(excerpt.toLowerCase());
+    if (excerpt && !supported) warnings.push(`Source excerpt for risk ${risk.code} could not be verified against the extracted document text.`);
+    return { ...risk, source_excerpt: supported ? excerpt : '', source_page: supported ? sourcePageForExcerpt(rawText, excerpt) : null };
+  });
+  return {
+    ...extraction,
+    warnings: uniqueStrings(warnings),
+    risks,
+    field_evidence: evidence,
+    field_confidence: Object.fromEntries(Object.entries(evidence).map(([path, item]) => [path, item.confidence]))
+  };
+}
+
+function serializePathValue(source: TenancyLegalIntelligence, path: string): string {
+  let current: unknown = source;
+  for (const segment of path.split('.')) {
+    if (!current || typeof current !== 'object') return '';
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return Array.isArray(current) ? current.join('; ') : current === null || current === undefined ? '' : String(current);
+}
+
+function sourcePageForExcerpt(rawText: string, excerpt: string): number | null {
+  const marker = /--- PAGE (\d+) ---/g;
+  const target = rawText.toLowerCase().indexOf(excerpt.toLowerCase());
+  if (target < 0) return null;
+  let page: number | null = null;
+  for (const match of rawText.matchAll(marker)) {
+    if ((match.index ?? 0) > target) break;
+    page = Number(match[1]);
+  }
+  return page;
+}
+
 function hasPathValue(source: TenancyLegalIntelligence, path: string): boolean {
   let current: unknown = source;
   for (const segment of path.split('.')) {
@@ -499,8 +640,11 @@ function hasPathValue(source: TenancyLegalIntelligence, path: string): boolean {
   return Array.isArray(current) ? current.length > 0 : typeof current === 'number' ? current > 0 : Boolean(current);
 }
 
-function addRisk(risks: LegalRisk[], code: string, severity: LegalRiskSeverity, reason: string, recommendation: string): void {
-  risks.push({ code, severity, reason, recommendation });
+function addRisk(
+  risks: LegalRisk[], code: string, severity: LegalRiskSeverity, reason: string, recommendation: string,
+  category = 'contract_completeness', sourcePage: number | null = null, sourceExcerpt = ''
+): void {
+  risks.push({ code, severity, category, reason, recommendation, source_page: sourcePage, source_excerpt: sourceExcerpt });
 }
 
 function uniqueRisks(values: unknown[]): LegalRisk[] {
@@ -518,8 +662,11 @@ function uniqueRisks(values: unknown[]): LegalRisk[] {
     result.push({
       code,
       severity,
+      category: String(candidate.category ?? 'contract_review').replace(/\s+/g, ' ').trim(),
       reason,
-      recommendation: String(candidate.recommendation ?? 'Review this issue against the signed agreement.').replace(/\s+/g, ' ').trim()
+      recommendation: String(candidate.recommendation ?? 'Review this issue against the signed agreement.').replace(/\s+/g, ' ').trim(),
+      source_page: Number.isInteger(candidate.source_page) && Number(candidate.source_page) > 0 ? Number(candidate.source_page) : null,
+      source_excerpt: String(candidate.source_excerpt ?? '').replace(/\s+/g, ' ').trim().slice(0, 500)
     });
   }
   return result;
@@ -623,11 +770,28 @@ function extractDepositMonths(text: string, kind: 'security' | 'utilit'): number
 }
 
 function hasConflictingDates(extraction: TenancyLegalIntelligence, rawText: string): boolean {
-  const { commencement_date: start, expiry_date: end } = extraction.tenancy;
-  if (start && end && new Date(`${end}T00:00:00Z`) <= new Date(`${start}T00:00:00Z`)) return true;
   const labelled = [...rawText.matchAll(/(?:commencement|start|expiry|expiration|end)\s+date\s*[:\-]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{4})/gi)]
     .map((match) => normalizeDate(match[1])).filter(Boolean);
   return new Set(labelled).size > 2;
+}
+
+function hasInvalidTenancyPeriod(extraction: TenancyLegalIntelligence): boolean {
+  const { commencement_date: start, expiry_date: end } = extraction.tenancy;
+  return Boolean(start && end && new Date(`${end}T00:00:00Z`) <= new Date(`${start}T00:00:00Z`));
+}
+
+function isAmbiguousNoticePeriod(value: string): boolean {
+  return !/\b\d+(?:\.\d+)?\s*(?:day|week|month|year)s?\b/i.test(value);
+}
+
+function findSourceExcerpt(rawText: string, pattern: RegExp): { page: number | null; excerpt: string } {
+  const match = rawText.match(pattern);
+  if (!match || match.index === undefined) return { page: null, excerpt: '' };
+  const lineStart = rawText.lastIndexOf('\n', match.index) + 1;
+  const lineEndIndex = rawText.indexOf('\n', match.index + match[0].length);
+  const lineEnd = lineEndIndex < 0 ? rawText.length : lineEndIndex;
+  const excerpt = rawText.slice(lineStart, lineEnd).replace(/\s+/g, ' ').trim().slice(0, 500);
+  return { page: excerpt ? sourcePageForExcerpt(rawText, excerpt) : null, excerpt };
 }
 
 function formatMoney(value: number): string {

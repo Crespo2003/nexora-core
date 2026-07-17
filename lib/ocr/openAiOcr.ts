@@ -23,7 +23,7 @@ export class OpenAiOcrProvider implements OcrProvider {
           input: [{
             role: 'user',
             content: [
-              { type: 'input_text', text: 'Transcribe all visible document text exactly. Preserve line breaks. Return only the transcription.' },
+              { type: 'input_text', text: 'Transcribe all visible document text exactly and process every page. Preserve line breaks. For paginated files, begin each page with --- PAGE N --- using the physical page number. Return only the transcription.' },
               media
             ]
           }],

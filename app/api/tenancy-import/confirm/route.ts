@@ -9,6 +9,7 @@ type ImportDocument = {
   fileSize: number;
   documentType: string;
   uploadStatus: string;
+  documentHash: string;
 };
 
 export async function POST(request: Request) {
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
     if (auth instanceof Response) return auth;
     const { supabase, workspaceId } = auth;
-    const imported = await supabase.rpc('sprint_009_import_tenancy_legal_intelligence', {
+    const imported = await supabase.rpc('sprint_011_import_tenancy_legal_intelligence', {
       p_workspace_id: workspaceId,
       p_payload: { tenancy, collection, document, extraction }
     });
