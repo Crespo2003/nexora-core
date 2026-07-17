@@ -174,9 +174,9 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
   });
   const summary = createTenancySummary(extraction);
   assert.match(summary, /2-year residential tenancy/i);
-  assert.match(summary, /RM3,500 monthly rental/);
-  assert.match(summary, /RM7,000 security deposit/);
-  assert.match(summary, /RM1,750 utility deposit/);
+  assert.match(summary, /RM 3,500\.00 monthly rental/);
+  assert.match(summary, /RM 7,000\.00 security deposit/);
+  assert.match(summary, /RM 1,750\.00 utility deposit/);
   assert.match(summary, /Renewal option available/);
   assert.match(summary, /2 legal risks detected/);
 });

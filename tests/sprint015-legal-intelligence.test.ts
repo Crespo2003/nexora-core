@@ -66,7 +66,7 @@ test('7. extracts entry or viewing clauses', () => assert.ok(buildLegalIntellige
 
 test('8. produces an executive legal summary', () => {
   const summary = buildLegalIntelligence(extraction(), sourceText).executive_summary;
-  assert.match(summary, /RM3,500/);
+  assert.match(summary, /RM 3,500\.00/);
   assert.match(summary, /medium-risk issues/i);
 });
 

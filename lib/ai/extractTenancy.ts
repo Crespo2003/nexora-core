@@ -5,6 +5,7 @@ import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
 import { logExtractionDiagnostic } from './extractionDiagnostics';
 import { formatNexoraDate } from '../dates/formatDate';
+import { formatMYR } from '../formatters';
 import {
   canonicalTenancyExtractionSchema,
   parseOpenAITenancyResponse,
@@ -355,9 +356,9 @@ export function createTenancySummary(extraction: TenancyLegalIntelligence): stri
   const opening = `This is a ${duration ? `${duration} ` : ''}${type.toLowerCase()} tenancy${commencement ? ` commencing on ${commencement}` : ''}`;
   const money = extraction.financial;
   const amounts = [
-    money.monthly_rental > 0 ? `RM${formatMoney(money.monthly_rental)} monthly rental` : '',
-    money.security_deposit > 0 ? `RM${formatMoney(money.security_deposit)} security deposit` : '',
-    money.utility_deposit > 0 ? `RM${formatMoney(money.utility_deposit)} utility deposit` : ''
+    money.monthly_rental > 0 ? `${formatMYR(money.monthly_rental)} monthly rental` : '',
+    money.security_deposit > 0 ? `${formatMYR(money.security_deposit)} security deposit` : '',
+    money.utility_deposit > 0 ? `${formatMYR(money.utility_deposit)} utility deposit` : ''
   ].filter(Boolean);
   const renewal = extraction.tenancy.renewal_option ? ' Renewal option available.' : ' No renewal option was detected.';
   const risk = ` ${extraction.risks.length} legal ${extraction.risks.length === 1 ? 'risk' : 'risks'} detected.`;

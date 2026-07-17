@@ -25,6 +25,7 @@ import {
   type TenancyMappedForm
 } from '../lib/tenancy/mapTenancyExtractionToForm';
 import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
+import { formatMYR } from '../lib/formatters';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -126,11 +127,7 @@ type ImportReviewForm = TenancyMappedForm;
 const todayIso = currentIsoDate();
 const currentMonth = currentIsoMonth();
 
-const currency = new Intl.NumberFormat('en-MY', {
-  currency: 'MYR',
-  style: 'currency',
-  maximumFractionDigits: 0
-});
+const currency = { format: (value: unknown) => formatMYR(value) };
 
 const getSupabaseClient = getBrowserSupabaseClient;
 

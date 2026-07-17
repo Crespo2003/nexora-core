@@ -110,3 +110,14 @@ If the upload itself fails, inspect the returned `stage` (`auth`, `validation`, 
 ## Branch strategy and current limitation
 
 Keep one focused branch per reviewed change. This repair branch is `feature/upload-end-to-end`; do not merge it until the migration and acceptance test are complete. The connected production database must receive the migration before the deployed current-main code can complete the persistence step. That is the sole live prerequisite for the repaired route; no destructive data cleanup is required.
+# Contact and collection intelligence
+
+Nexora stores tenancy-scoped contact intelligence in additive Supabase tables: `contacts`, `contact_roles`, `tenancy_contacts`, `contact_channels`, `contact_follow_ups`, `contact_communications`, `collection_contact_preferences`, `duplicate_decisions`, and `contact_audit_history`. Every record carries a `workspace_id`, is RLS-protected with `has_workspace_role`, and is indexed for ordinary workspace queries.
+
+Phone values are normalized by `lib/contacts/phone.ts`; the original extracted value is retained for audit. Malaysian numbers become `+60…` and a WhatsApp-ready digits-only value. Foreign E.164 numbers are preserved and marked for review. Dates are rendered through `lib/dates/formatDate.ts`, and all customer-facing MYR values through `lib/formatters.ts`. Address normalization retains the source address while producing a cleaned display address and confidence.
+
+Witnesses are never assumed to be agents. Collection routing permits a witness only when an explicit authorization exists. Manual role corrections are flagged in the contact and role records and must not be replaced by future extraction. Communication records store channel, template, outcome, and a content hash rather than unnecessary message bodies.
+
+Apply `20260717193513_contact_management_and_collection_routing.sql` through the normal Supabase migration workflow before enabling contact persistence in production. Verify RLS with an authenticated second-workspace account. No service-role credential is required or exposed.
+
+For development, run `pnpm install --frozen-lockfile`, `pnpm run lint`, `pnpm run typecheck`, `pnpm run test`, and `pnpm run build`. Future AI changes should preserve raw extracted data, source page/excerpt, confidence, and manual-correction fields.

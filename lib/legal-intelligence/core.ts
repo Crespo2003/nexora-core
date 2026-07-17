@@ -1,4 +1,5 @@
 import { formatNexoraDate } from '../dates/formatDate';
+import { formatMYR } from '../formatters';
 
 export const clauseCategories = [
   'Rental payment', 'Late payment', 'Security deposit', 'Utility deposit', 'Access card deposit', 'Car park deposit',
@@ -346,9 +347,9 @@ function createExecutiveLegalSummary(facts: Facts, clauses: LegalClause[], risks
   const financial = record(facts.financial);
   const period = [formatDate(text(tenancy.commencement_date)), formatDate(text(tenancy.expiry_date))].filter(Boolean).join(' to ');
   const amounts = [
-    money(financial.monthly_rental) ? `RM${formatMoney(money(financial.monthly_rental))} monthly rental` : '',
-    money(financial.security_deposit) ? `RM${formatMoney(money(financial.security_deposit))} security deposit` : '',
-    money(financial.utility_deposit) ? `RM${formatMoney(money(financial.utility_deposit))} utility deposit` : ''
+    money(financial.monthly_rental) ? `${formatMYR(money(financial.monthly_rental))} monthly rental` : '',
+    money(financial.security_deposit) ? `${formatMYR(money(financial.security_deposit))} security deposit` : '',
+    money(financial.utility_deposit) ? `${formatMYR(money(financial.utility_deposit))} utility deposit` : ''
   ].filter(Boolean).join(', ');
   const maintenance = clauses.find((clause) => clause.category === 'Structural maintenance' || clause.category === 'General maintenance');
   const utilities = clauses.find((clause) => clause.category === 'Utilities');

@@ -1,5 +1,6 @@
 import type { TenancyLegalIntelligence } from '../ai/extractTenancy';
 import { formatExtractedNexoraDate, normalizeDateForStorage } from '../dates/formatDate';
+import { normalizePhone } from '../contacts/phone';
 import type { TenancyExtraction } from './parser';
 
 export type MappedMoney = number | '';
@@ -211,12 +212,8 @@ export function normalizeDateForInput(input: string): string {
 }
 
 export function normalizeMalaysianPhone(input: string): string {
-  if (!input.trim()) return '';
-  const normalized = input.replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '');
-  if (/^\+60\d{8,10}$/.test(normalized)) return normalized;
-  if (/^60\d{8,10}$/.test(normalized)) return `+${normalized}`;
-  if (/^0\d{8,10}$/.test(normalized)) return `+60${normalized.slice(1)}`;
-  return normalized;
+  const normalized = normalizePhone(input);
+  return normalized.normalized || input.trim();
 }
 
 function value(input: unknown): string {
