@@ -116,6 +116,7 @@ type ExtractTenancyOptions = {
   maxOutputTokens?: number;
   timeoutMs?: number;
   maxAttempts?: number;
+  requestId?: string;
 };
 
 const stringSchema = { type: 'string' } as const;
@@ -315,6 +316,7 @@ export async function extractTenancyText(
       maxOutputTokens: options.maxOutputTokens,
       timeoutMs: options.timeoutMs,
       maxAttempts: options.maxAttempts,
+      requestId: options.requestId,
       prompt: `Document: ${filename}\nSection ${index + 1} of ${chunks.length}. Extract every relevant fact from this section.\n\n${chunks[index]}`
     }));
   }
@@ -328,6 +330,7 @@ export async function extractTenancyText(
       maxOutputTokens: options.maxOutputTokens,
       timeoutMs: options.timeoutMs,
       maxAttempts: options.maxAttempts,
+      requestId: options.requestId,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
   const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
@@ -475,6 +478,7 @@ async function requestStructuredExtraction(input: {
   maxOutputTokens?: number;
   timeoutMs?: number;
   maxAttempts?: number;
+  requestId?: string;
 }): Promise<TenancyLegalIntelligence> {
   try {
     return await requestStructuredOpenAi({
@@ -488,6 +492,7 @@ async function requestStructuredExtraction(input: {
       maxOutputTokens: input.maxOutputTokens ?? 12_000,
       timeoutMs: input.timeoutMs,
       maxAttempts: input.maxAttempts,
+      requestId: input.requestId,
       validate: validateExtractionShape
     });
   } catch (error) {

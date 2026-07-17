@@ -25,6 +25,7 @@ export type OpenAiStructuredRequest<T> = {
   maxOutputTokens?: number;
   timeoutMs?: number;
   maxAttempts?: number;
+  requestId?: string;
   validate: (value: unknown) => T;
 };
 
@@ -76,8 +77,9 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
   let lastError: OpenAiClientError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const attemptStartedAt = Date.now();
     try {
-      logOpenAiDiagnostic('request_started', { attempt, tenancyModel: model, openAiKeyPresent: true });
+      logOpenAiDiagnostic('request_started', { requestId: request.requestId, attempt, tenancyModel: model, openAiKeyPresent: true });
       const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: request.timeoutMs, maxRetries: 0 });
       const response = await client.responses.create({
         model,
@@ -97,6 +99,14 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         max_output_tokens: request.maxOutputTokens ?? 12_000
       });
 
+      logOpenAiDiagnostic('response_received', {
+        requestId: request.requestId,
+        attempt,
+        tenancyModel: model,
+        upstreamRequestId: readResponseRequestId(response),
+        elapsedMs: Date.now() - attemptStartedAt
+      });
+
       const payload = response as unknown as ResponsesPayload;
       const refusal = (payload.output ?? []).flatMap((item) => item.content ?? []).find((item) => item.refusal)?.refusal;
       if (refusal) throw new OpenAiClientError('invalid_ai_response');
@@ -107,33 +117,54 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         .join('')
         .trim();
       if (!outputText) throw new OpenAiClientError('invalid_ai_response');
+      const parsingStartedAt = Date.now();
       try {
         const result = request.validate(JSON.parse(outputText));
-        logOpenAiDiagnostic('request_succeeded', {
+        logOpenAiDiagnostic('response_parsed', {
+          requestId: request.requestId,
           attempt,
           tenancyModel: model,
-          requestId: readResponseRequestId(response),
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - parsingStartedAt
+        });
+        logOpenAiDiagnostic('request_succeeded', {
+          requestId: request.requestId,
+          attempt,
+          tenancyModel: model,
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - attemptStartedAt,
           ...usageDiagnostics(payload)
         });
         return result;
       } catch {
+        logOpenAiDiagnostic('response_parse_failed', {
+          requestId: request.requestId,
+          attempt,
+          tenancyModel: model,
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - parsingStartedAt
+        });
         throw new OpenAiClientError('invalid_ai_response');
       }
     } catch (error) {
       const normalized = classifyOpenAiError(error);
       logOpenAiError('request_error', error, {
+        requestId: request.requestId,
         attempt,
         tenancyModel: model,
         fallbackReason: normalized.code,
         statusCode: normalized.status,
-        requestId: normalized.requestId
+        upstreamRequestId: normalized.requestId,
+        elapsedMs: Date.now() - attemptStartedAt
       });
       logOpenAiDiagnostic('request_failed', {
+        requestId: request.requestId,
         attempt,
         tenancyModel: model,
         fallbackReason: normalized.code,
         statusCode: normalized.status,
-        requestId: normalized.requestId
+        upstreamRequestId: normalized.requestId,
+        elapsedMs: Date.now() - attemptStartedAt
       });
       if (!isRetryableError(normalized) || attempt === attempts) throw normalized;
       lastError = normalized;

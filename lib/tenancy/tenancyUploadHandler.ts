@@ -193,18 +193,26 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
 
       stage = 'storage';
       const storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
+      const uploadStartedAt = Date.now();
       const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
       if (upload.error) throw upload.error;
       uploadedPath = storagePath;
-      logExtractionDiagnostic('storage_completed', { requestId, stage, fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt', fileSize: file.size });
+      logExtractionDiagnostic('storage_completed', {
+        requestId,
+        stage,
+        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+        fileSize: file.size,
+        elapsedMs: Date.now() - uploadStartedAt
+      });
 
       let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
       stage = isPdf ? 'pdf' : isDocx ? 'docx' : 'parser';
       try {
         extraction = await dependencies.extractTenancyFile({ buffer, filename: file.name, mimeType }, {
           maxOutputTokens: 6_000,
-          timeoutMs: 75_000,
-          maxAttempts: 1
+          timeoutMs: 120_000,
+          maxAttempts: 2,
+          requestId
         });
       } catch (error) {
         const extractionStage = stageForExtractionError(error, mimeType);

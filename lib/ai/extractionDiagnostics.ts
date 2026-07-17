@@ -16,6 +16,7 @@ type DiagnosticDetails = {
   elapsedMs?: number;
   errorName?: string;
   errorCode?: string;
+  upstreamRequestId?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
