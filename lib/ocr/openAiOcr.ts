@@ -31,7 +31,21 @@ export class OpenAiOcrProvider implements OcrProvider {
         max_output_tokens: 30_000
       });
       const text = String(response.output_text ?? '').trim();
-      logOpenAiDiagnostic(text ? 'ocr_succeeded' : 'ocr_invalid_response', { ocrModel: this.model });
+      const responseDetails = response as { _request_id?: string; request_id?: string; status?: unknown };
+      logOpenAiDiagnostic('ocr_response_received', {
+        ocrModel: this.model,
+        statusCode: 200,
+        responseStatus: typeof responseDetails.status === 'string' ? responseDetails.status : undefined,
+        requestId: responseDetails._request_id ?? responseDetails.request_id,
+        rawOpenAiResponsePreview: text.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 500)
+      });
+      logOpenAiDiagnostic(text ? 'ocr_succeeded' : 'ocr_invalid_response', {
+        ocrModel: this.model,
+        textLength: text.length,
+        statusCode: 200,
+        responseStatus: typeof responseDetails.status === 'string' ? responseDetails.status : undefined,
+        requestId: responseDetails._request_id ?? responseDetails.request_id
+      });
       return text ? { status: 'completed', text, error: '' } : { status: 'failed', text: '', error: 'ocr-malformed-or-empty-response' };
     } catch (error) {
       const classified = classifyOpenAiError(error);

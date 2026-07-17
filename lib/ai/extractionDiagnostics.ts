@@ -1,7 +1,11 @@
 type DiagnosticDetails = {
+  stage?: 'pdf' | 'ocr' | 'openai' | 'parser' | 'mapping' | 'upload' | 'authorization' | 'duplicate-check';
+  filename?: string;
+  fileSize?: number;
   fileType?: string;
   textLength?: number;
   usedOcr?: boolean;
+  pageCount?: number | null;
   openAiConfigured?: boolean;
   openAiKeyPresent?: boolean;
   configurationReason?: string;
@@ -9,7 +13,12 @@ type DiagnosticDetails = {
   ocrModel?: string;
   attempt?: number;
   statusCode?: number;
+  responseStatus?: string;
   requestId?: string;
+  rawOpenAiResponsePreview?: string;
+  jsonParseResult?: 'succeeded' | 'failed';
+  mappedObjectPreview?: string;
+  errorMessage?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
