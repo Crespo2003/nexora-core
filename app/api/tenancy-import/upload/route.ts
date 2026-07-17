@@ -55,6 +55,8 @@ export async function POST(request: Request) {
     logExtractionDiagnostic('file_validated', {
       fileType,
       openAiConfigured: config.configured,
+      openAiKeyPresent: config.keyPresent,
+      configurationReason: config.reason,
       tenancyModel: config.tenancyModel,
       ocrModel: config.ocrModel
     });
@@ -138,6 +140,8 @@ export async function POST(request: Request) {
       textLength: extraction.rawText.length,
       usedOcr: extraction.document.usedOcr,
       openAiConfigured: config.configured,
+      openAiKeyPresent: config.keyPresent,
+      configurationReason: config.reason,
       tenancyModel: config.tenancyModel,
       provider: extraction.provider,
       fallbackReason: extraction.fallbackReason

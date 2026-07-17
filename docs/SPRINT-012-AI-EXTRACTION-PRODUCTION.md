@@ -72,7 +72,7 @@ Do not claim the live AI path is active if the response reports the deterministi
 }
 ```
 
-Allowed fallback reason codes are `openai_not_configured`, `openai_timeout`, `openai_request_failed`, `invalid_ai_response`, `ocr_failed`, and `text_extraction_failed`. OCR or text-extraction failures preserve the uploaded document and return an actionable bilingual failure instead of a fabricated extraction.
+Allowed fallback reason codes are `openai_not_configured`, `openai_authentication_failed`, `openai_permission_denied`, `openai_model_not_found`, `openai_rate_limited`, `openai_bad_request`, `openai_server_error`, `openai_timeout`, `openai_request_failed`, `invalid_ai_response`, `ocr_failed`, and `text_extraction_failed`. `openai_not_configured` is reserved for a missing or empty server-side `OPENAI_API_KEY`; API authentication and provider failures use their own reason codes. OCR or text-extraction failures preserve the uploaded document and return an actionable bilingual failure instead of a fabricated extraction.
 
 ## Safe rollback
 
