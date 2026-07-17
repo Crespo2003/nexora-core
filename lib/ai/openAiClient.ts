@@ -12,6 +12,12 @@ export type OpenAiFailureCode =
   | 'openai_server_error'
   | 'openai_timeout'
   | 'openai_request_failed'
+  | 'openai_refusal'
+  | 'openai_incomplete'
+  | 'openai_empty_response'
+  | 'openai_malformed_json'
+  | 'openai_schema_mismatch'
+  | 'openai_truncated'
   | 'invalid_ai_response';
 
 export type OpenAiStructuredRequest<T> = {
@@ -25,12 +31,17 @@ export type OpenAiStructuredRequest<T> = {
   maxOutputTokens?: number;
   timeoutMs?: number;
   maxAttempts?: number;
-  validate: (value: unknown) => T;
+  requestId?: string;
+  validate?: (value: unknown) => T;
+  /** Parses a provider response when a product-specific response contract is required. */
+  parseResponse?: (response: unknown) => T;
 };
 
 type ResponsesPayload = {
+  status?: string;
+  incomplete_details?: { reason?: string | null } | null;
   output_text?: string;
-  output?: Array<{ content?: Array<{ text?: string; type?: string; refusal?: string }> }>;
+  output?: Array<{ type?: string; content?: Array<{ text?: string; type?: string; refusal?: string }> }>;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -76,8 +87,9 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
   let lastError: OpenAiClientError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const attemptStartedAt = Date.now();
     try {
-      logOpenAiDiagnostic('request_started', { attempt, tenancyModel: model, openAiKeyPresent: true });
+      logOpenAiDiagnostic('request_started', { requestId: request.requestId, provider: 'openai', attempt, tenancyModel: model, openAiKeyPresent: true });
       const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: request.timeoutMs, maxRetries: 0 });
       const response = await client.responses.create({
         model,
@@ -98,42 +110,77 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
       });
 
       const payload = response as unknown as ResponsesPayload;
-      const refusal = (payload.output ?? []).flatMap((item) => item.content ?? []).find((item) => item.refusal)?.refusal;
-      if (refusal) throw new OpenAiClientError('invalid_ai_response');
-      const outputText = payload.output_text ?? (payload.output ?? [])
-        .flatMap((item) => item.content ?? [])
-        .filter((item) => item.type === 'output_text' || Boolean(item.text))
-        .map((item) => item.text ?? '')
-        .join('')
-        .trim();
-      if (!outputText) throw new OpenAiClientError('invalid_ai_response');
+      const responseDetails = responseDiagnostics(payload);
+      logOpenAiDiagnostic('response_received', {
+        requestId: request.requestId,
+        provider: 'openai',
+        attempt,
+        tenancyModel: model,
+        upstreamRequestId: readResponseRequestId(response),
+        elapsedMs: Date.now() - attemptStartedAt,
+        ...responseDetails
+      });
+
+      const parsingStartedAt = Date.now();
       try {
-        const result = request.validate(JSON.parse(outputText));
-        logOpenAiDiagnostic('request_succeeded', {
+        const result = request.parseResponse
+          ? request.parseResponse(response)
+          : parseAndValidatePayload(payload, request.validate);
+        logOpenAiDiagnostic('response_parsed', {
+          requestId: request.requestId,
+          provider: 'openai',
           attempt,
           tenancyModel: model,
-          requestId: readResponseRequestId(response),
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - parsingStartedAt,
+          ...responseDetails,
+          parseResult: 'accepted'
+        });
+        logOpenAiDiagnostic('request_succeeded', {
+          requestId: request.requestId,
+          provider: 'openai',
+          attempt,
+          tenancyModel: model,
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - attemptStartedAt,
           ...usageDiagnostics(payload)
         });
         return result;
-      } catch {
-        throw new OpenAiClientError('invalid_ai_response');
+      } catch (error) {
+        const parseDetails = responseErrorDiagnostics(error);
+        logOpenAiDiagnostic('response_parse_failed', {
+          requestId: request.requestId,
+          provider: 'openai',
+          attempt,
+          tenancyModel: model,
+          upstreamRequestId: readResponseRequestId(response),
+          elapsedMs: Date.now() - parsingStartedAt,
+          ...responseDetails,
+          ...parseDetails
+        });
+        throw error instanceof OpenAiClientError ? error : new OpenAiClientError('invalid_ai_response');
       }
     } catch (error) {
       const normalized = classifyOpenAiError(error);
       logOpenAiError('request_error', error, {
+        requestId: request.requestId,
+        provider: 'openai',
         attempt,
         tenancyModel: model,
         fallbackReason: normalized.code,
         statusCode: normalized.status,
-        requestId: normalized.requestId
+        upstreamRequestId: normalized.requestId,
+        elapsedMs: Date.now() - attemptStartedAt
       });
       logOpenAiDiagnostic('request_failed', {
+        requestId: request.requestId,
+        provider: 'openai',
         attempt,
         tenancyModel: model,
         fallbackReason: normalized.code,
         statusCode: normalized.status,
-        requestId: normalized.requestId
+        upstreamRequestId: normalized.requestId,
+        elapsedMs: Date.now() - attemptStartedAt
       });
       if (!isRetryableError(normalized) || attempt === attempts) throw normalized;
       lastError = normalized;
@@ -172,7 +219,8 @@ export function classifyOpenAiError(error: unknown): OpenAiClientError {
 }
 
 function isRetryableError(error: OpenAiClientError): boolean {
-  if (error.code === 'openai_timeout' || error.code === 'invalid_ai_response') return true;
+  if (error.code === 'openai_timeout' || error.code === 'invalid_ai_response' || error.code === 'openai_truncated') return true;
+  if (error.code === 'openai_empty_response' || error.code === 'openai_malformed_json' || error.code === 'openai_schema_mismatch') return true;
   if (error.code === 'openai_rate_limited' || error.code === 'openai_server_error') return true;
   if (error.code !== 'openai_request_failed') return false;
   return error.status === undefined || error.status === 408 || error.status === 409;
@@ -187,6 +235,55 @@ function readResponseRequestId(response: unknown): string | undefined {
   if (!response || typeof response !== 'object') return undefined;
   const candidate = response as { _request_id?: string; request_id?: string };
   return candidate._request_id ?? candidate.request_id;
+}
+
+function parseAndValidatePayload<T>(payload: ResponsesPayload, validate: OpenAiStructuredRequest<T>['validate']): T {
+  if (payload.status === 'incomplete') throw new OpenAiClientError('openai_incomplete');
+  const refusal = (payload.output ?? []).flatMap((item) => item.content ?? []).find((item) => item.refusal)?.refusal;
+  if (refusal) throw new OpenAiClientError('openai_refusal');
+  const outputText = payload.output_text ?? (payload.output ?? [])
+    .flatMap((item) => item.content ?? [])
+    .filter((item) => item.type === 'output_text' && Boolean(item.text))
+    .map((item) => item.text ?? '')
+    .join('')
+    .trim();
+  if (!outputText) throw new OpenAiClientError('openai_empty_response');
+  try {
+    return validate ? validate(JSON.parse(outputText)) : JSON.parse(outputText) as T;
+  } catch (error) {
+    if (error instanceof OpenAiClientError) throw error;
+    throw new OpenAiClientError('openai_malformed_json');
+  }
+}
+
+function responseDiagnostics(payload: ResponsesPayload): {
+  responseStatus?: string;
+  incompleteReason?: string;
+  outputItemTypes?: string[];
+  outputTextLength?: number;
+} {
+  const content = (payload.output ?? []).flatMap((item) => item.content ?? []);
+  const fallbackText = content.filter((item) => item.type === 'output_text' && Boolean(item.text)).map((item) => item.text ?? '').join('');
+  const outputText = typeof payload.output_text === 'string' ? payload.output_text : fallbackText;
+  return {
+    responseStatus: payload.status,
+    incompleteReason: typeof payload.incomplete_details?.reason === 'string' ? payload.incomplete_details.reason : undefined,
+    outputItemTypes: content.map((item) => item.type ?? 'unknown'),
+    outputTextLength: outputText.trim().length
+  };
+}
+
+function responseErrorDiagnostics(error: unknown): {
+  parseResult?: string;
+  validationIssuePaths?: string[];
+} {
+  if (!error || typeof error !== 'object') return {};
+  const candidate = error as { code?: unknown; diagnostics?: { parseResult?: unknown; validationIssuePaths?: unknown } };
+  const paths = candidate.diagnostics?.validationIssuePaths;
+  return {
+    parseResult: typeof candidate.diagnostics?.parseResult === 'string' ? candidate.diagnostics.parseResult : typeof candidate.code === 'string' ? candidate.code : undefined,
+    validationIssuePaths: Array.isArray(paths) ? paths.filter((path): path is string => typeof path === 'string').slice(0, 20) : undefined
+  };
 }
 
 function usageDiagnostics(payload: ResponsesPayload): {

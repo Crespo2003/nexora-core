@@ -11,7 +11,7 @@ import {
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
-import { readJsonApiResponse } from '../lib/http/jsonResponse';
+import { JsonApiResponseError, readJsonApiResponse } from '../lib/http/jsonResponse';
 import { LegalIntelligencePanel } from './legal-intelligence-panel';
 import {
   editableTenancyFormFields,
@@ -201,8 +201,11 @@ function isMissingTableError(error: unknown): boolean {
 function userError(error: unknown, language: Language): string {
   const t = getTranslations(language);
   if (isMissingTableError(error)) return t.notices.tablesMissing;
-  if (error instanceof Error && (error.message === 'non-json-api-response' || error.message === 'invalid-json-api-response')) {
-    return language === 'zh' ? '提取服务返回了无效响应。请稍后重试。' : 'The extraction service returned an invalid response. Please try again.';
+  if (error instanceof JsonApiResponseError) {
+    const requestId = error.details.requestId ? ` Request ID: ${error.details.requestId}.` : '';
+    return language === 'zh'
+      ? `上传端点返回 HTTP ${error.details.status}（${error.details.contentType || '未知内容类型'}）。请检查服务器日志。${requestId}`
+      : `The upload endpoint returned HTTP ${error.details.status} (${error.details.contentType || 'unknown content type'}). Check the server logs.${requestId}`;
   }
   if (typeof error === 'object' && error && 'message' in error) return String(error.message);
   if (error instanceof Error) return error.message;
@@ -879,11 +882,18 @@ export default function RentalCommandCentre() {
       setImportState('parsing');
       const payload = await readJsonApiResponse(response) as {
         error?: unknown;
+        stage?: unknown;
+        code?: unknown;
         documentId?: unknown;
         extraction?: TenancyExtraction;
         document?: UploadedDocument;
       };
-      if (!response.ok || !payload.extraction || !payload.document) throw new Error(apiErrorMessage(payload.error ?? t.errors.parseFailed, language));
+      if (!response.ok || !payload.extraction || !payload.document) {
+        const stage = typeof payload.stage === 'string' ? payload.stage : 'unknown';
+        const code = typeof payload.code === 'string' ? payload.code : '';
+        const message = apiErrorMessage(payload.error ?? t.errors.parseFailed, language);
+        throw new Error(code ? `[${stage}:${code}] ${message}` : `[${stage}] ${message}`);
+      }
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
       const mapped = mapTenancyExtractionToForm(parsed, {
@@ -903,7 +913,7 @@ export default function RentalCommandCentre() {
     } catch (error) {
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
-      setNotice({ tone: 'error', message: `${t.errors.parseFailed} ${userError(error, language)}` });
+      setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
       setOperationId(null);
     }

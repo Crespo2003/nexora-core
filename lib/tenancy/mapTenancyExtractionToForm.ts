@@ -164,6 +164,9 @@ export function mapTenancyExtractionToForm(
   mapped.lowConfidenceFields = Object.entries(fieldConfidence)
     .filter(([path, confidence]) => confidence < 80 && hasMappedValue(mapped, path))
     .map(([path]) => path);
+  if (root.fallbackUsed === true || root.provider === 'deterministic') {
+    clearLowConfidenceFallbackValues(mapped, fieldConfidence);
+  }
   return mapped;
 }
 
@@ -275,6 +278,18 @@ function riskSummary(input: unknown): string {
 }
 
 function hasMappedValue(mapped: TenancyMappedForm, path: string): boolean {
+  const field = formFieldForExtractionPath(path);
+  return field ? mapped[field] !== '' : false;
+}
+
+function clearLowConfidenceFallbackValues(mapped: TenancyMappedForm, confidence: Record<string, number>): void {
+  for (const [path, score] of Object.entries(confidence)) {
+    const field = formFieldForExtractionPath(path);
+    if (field && score < 80) (mapped as unknown as Record<string, string | number>)[field] = '';
+  }
+}
+
+function formFieldForExtractionPath(path: string): keyof TenancyMappedForm | undefined {
   const aliases: Record<string, keyof TenancyMappedForm> = {
     'tenant.name': 'tenantName', 'tenant.company': 'tenantCompany', 'tenant.ic_passport': 'tenantIdentification',
     'tenant.phone': 'tenantPhone', 'tenant.email': 'tenantEmail', 'landlord.name': 'landlordName',
@@ -295,8 +310,7 @@ function hasMappedValue(mapped: TenancyMappedForm, path: string): boolean {
     'legal.insurance': 'insurance', 'legal.maintenance': 'maintenance',
     'special_clauses': 'specialClauses'
   };
-  const field = aliases[path];
-  return field ? mapped[field] !== '' : false;
+  return aliases[path];
 }
 
 function roundMoney(value: number): number {

@@ -1,5 +1,9 @@
 type DiagnosticDetails = {
+  requestId?: string;
+  stage?: 'auth' | 'upload' | 'validation' | 'storage' | 'pdf' | 'docx' | 'ocr' | 'openai' | 'parser' | 'mapping' | 'database' | 'unknown';
+  authenticated?: boolean;
   fileType?: string;
+  fileSize?: number;
   textLength?: number;
   usedOcr?: boolean;
   openAiConfigured?: boolean;
@@ -9,7 +13,16 @@ type DiagnosticDetails = {
   ocrModel?: string;
   attempt?: number;
   statusCode?: number;
-  requestId?: string;
+  elapsedMs?: number;
+  errorName?: string;
+  errorCode?: string;
+  upstreamRequestId?: string;
+  responseStatus?: string;
+  incompleteReason?: string;
+  outputItemTypes?: string[];
+  outputTextLength?: number;
+  parseResult?: string;
+  validationIssuePaths?: string[];
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;

@@ -16,9 +16,10 @@ export class OpenAiOcrProvider implements OcrProvider {
     const media = input.mimeType.startsWith('image/')
       ? { type: 'input_image' as const, image_url: `data:${input.mimeType};base64,${encoded}`, detail: 'high' as const }
       : { type: 'input_file' as const, filename: input.filename, file_data: `data:${input.mimeType};base64,${encoded}` };
+    const startedAt = Date.now();
     try {
       logOpenAiDiagnostic('ocr_started', { ocrModel: this.model, openAiKeyPresent: true });
-      const client = createOpenAiClient({ apiKey: this.apiKey, fetcher: this.fetcher, timeoutMs: 180_000, maxRetries: 2 });
+      const client = createOpenAiClient({ apiKey: this.apiKey, fetcher: this.fetcher, timeoutMs: 90_000, maxRetries: 0 });
       const response = await client.responses.create({
         model: this.model,
         input: [{
@@ -30,8 +31,13 @@ export class OpenAiOcrProvider implements OcrProvider {
         }],
         max_output_tokens: 30_000
       });
+      logOpenAiDiagnostic('ocr_response_received', { ocrModel: this.model, elapsedMs: Date.now() - startedAt });
       const text = String(response.output_text ?? '').trim();
-      logOpenAiDiagnostic(text ? 'ocr_succeeded' : 'ocr_invalid_response', { ocrModel: this.model });
+      logOpenAiDiagnostic(text ? 'ocr_succeeded' : 'ocr_invalid_response', {
+        ocrModel: this.model,
+        textLength: text.length,
+        elapsedMs: Date.now() - startedAt
+      });
       return text ? { status: 'completed', text, error: '' } : { status: 'failed', text: '', error: 'ocr-malformed-or-empty-response' };
     } catch (error) {
       const classified = classifyOpenAiError(error);
@@ -39,13 +45,15 @@ export class OpenAiOcrProvider implements OcrProvider {
         ocrModel: this.model,
         fallbackReason: classified.code,
         statusCode: classified.status,
-        requestId: classified.requestId
+        requestId: classified.requestId,
+        elapsedMs: Date.now() - startedAt
       });
       logOpenAiDiagnostic('ocr_failed', {
         ocrModel: this.model,
         fallbackReason: classified.code,
         statusCode: classified.status,
-        requestId: classified.requestId
+        requestId: classified.requestId,
+        elapsedMs: Date.now() - startedAt
       });
       return { status: 'failed', text: '', error: classified.code === 'openai_timeout' ? 'ocr-provider-timeout' : 'ocr-provider-request-failed' };
     }
