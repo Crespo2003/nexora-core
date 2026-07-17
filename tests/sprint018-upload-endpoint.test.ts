@@ -87,7 +87,9 @@ test('upload route uses the Node runtime and bounded AI work before Vercel timeo
   assert.match(handler, /maxAttempts: 2/);
   assert.match(handler, /maxOutputTokens: 6_000/);
   assert.match(extraction, /maxOutputTokens: input\.maxOutputTokens \?\? 12_000/);
-  assert.match(ocr, /timeoutMs: 90_000, maxRetries: 0/);
+  assert.match(ocr, /const ocrRequestTimeoutMs = 120_000/);
+  assert.match(ocr, /const ocrMaxAttempts = 2/);
+  assert.match(ocr, /timeoutMs: ocrRequestTimeoutMs, maxRetries: 0/);
 });
 
 function createHandler(extract: () => Promise<any>) {

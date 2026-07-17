@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { requestStructuredOpenAi } from '../lib/ai/openAiClient';
+import { OpenAiOcrProvider } from '../lib/ocr/openAiOcr';
 
 test('the tenancy upload allows a 120-second OpenAI request and retries it once', () => {
   const handler = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
@@ -41,6 +42,27 @@ test('a slow first OpenAI attempt is retried before the caller receives a failur
   });
 
   assert.deepEqual(result, { accepted: true });
+  assert.equal(calls, 2);
+});
+
+test('a slow OCR attempt receives the full timeout and is retried once before failing', async () => {
+  let calls = 0;
+  const provider = new OpenAiOcrProvider('synthetic-key', 'gpt-4.1-mini', async () => {
+    calls += 1;
+    if (calls === 1) throw new DOMException('Synthetic OCR timeout', 'TimeoutError');
+    return new Response(JSON.stringify({ output_text: 'FULL TENANCY AGREEMENT TEXT', status: 'completed' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  });
+
+  const result = await provider.extractText({
+    buffer: Buffer.from('%PDF-1.7\nsynthetic'),
+    mimeType: 'application/pdf',
+    filename: 'scanned-tenancy.pdf'
+  });
+
+  assert.deepEqual(result, { status: 'completed', text: 'FULL TENANCY AGREEMENT TEXT', error: '' });
   assert.equal(calls, 2);
 });
 
