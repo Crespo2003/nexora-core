@@ -11,6 +11,7 @@ import {
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
+import { LegalIntelligencePanel } from './legal-intelligence-panel';
 import {
   editableTenancyFormFields,
   mapTenancyExtractionToForm,
@@ -1091,6 +1092,7 @@ export default function RentalCommandCentre() {
                         fieldConfidence={reviewForm.fieldConfidence}
                       />
                       <ExtractionReviewDetails mapped={reviewForm} extraction={extraction} fallback={t.notDetected} />
+                      <LegalIntelligencePanel extraction={extraction.legalIntelligence} rawText={extraction.rawText} />
                     </>
                   )}
                   <details className="raw-text">

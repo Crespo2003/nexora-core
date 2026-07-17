@@ -31,6 +31,11 @@ export type OpenAiStructuredRequest<T> = {
 type ResponsesPayload = {
   output_text?: string;
   output?: Array<{ content?: Array<{ text?: string; type?: string; refusal?: string }> }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 export class OpenAiClientError extends Error {
@@ -107,7 +112,8 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         logOpenAiDiagnostic('request_succeeded', {
           attempt,
           tenancyModel: model,
-          requestId: readResponseRequestId(response)
+          requestId: readResponseRequestId(response),
+          ...usageDiagnostics(payload)
         });
         return result;
       } catch {
@@ -174,6 +180,28 @@ function readResponseRequestId(response: unknown): string | undefined {
   if (!response || typeof response !== 'object') return undefined;
   const candidate = response as { _request_id?: string; request_id?: string };
   return candidate._request_id ?? candidate.request_id;
+}
+
+function usageDiagnostics(payload: ResponsesPayload): {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedRequestCostUsd?: number;
+} {
+  const inputTokens = finiteNonNegative(payload.usage?.input_tokens);
+  const outputTokens = finiteNonNegative(payload.usage?.output_tokens);
+  const totalTokens = finiteNonNegative(payload.usage?.total_tokens);
+  const inputRate = finiteNonNegative(Number(process.env.OPENAI_INPUT_COST_PER_MILLION_USD));
+  const outputRate = finiteNonNegative(Number(process.env.OPENAI_OUTPUT_COST_PER_MILLION_USD));
+  const estimatedRequestCostUsd = inputRate !== undefined && outputRate !== undefined && inputTokens !== undefined && outputTokens !== undefined
+    ? Number((((inputTokens * inputRate) + (outputTokens * outputRate)) / 1_000_000).toFixed(8))
+    : undefined;
+  return { inputTokens, outputTokens, totalTokens, estimatedRequestCostUsd };
+}
+
+function finiteNonNegative(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : Number.NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
 }
 
 function retryDelay(attempt: number): number {

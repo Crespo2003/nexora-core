@@ -1651,6 +1651,45 @@ select {
 .tw-empty strong { color: #cbd5e1; }
 .tw-empty p { margin: 4px 0 0; }
 
+.legal-intelligence { display: grid; gap: 15px; margin-top: 22px; border-top: 1px solid rgba(148, 163, 184, 0.16); padding-top: 22px; }
+.legal-intelligence h3 { margin: 3px 0 0; color: #e2e8f0; font-size: 16px; }
+.legal-clause-count { color: #67e8f9; font-size: 13px; }
+.legal-summary { max-width: 940px; margin: 0; color: #cbd5e1; line-height: 1.6; }
+.legal-risk-overview { display: flex; flex-wrap: wrap; gap: 8px; }
+.legal-risk-badge { display: inline-flex; width: fit-content; align-items: center; border: 1px solid currentColor; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; line-height: 1; text-transform: uppercase; }
+.legal-risk-badge.high { color: #fca5a5; background: rgba(239, 68, 68, 0.1); }
+.legal-risk-badge.medium { color: #fcd34d; background: rgba(245, 158, 11, 0.1); }
+.legal-risk-badge.low { color: #86efac; background: rgba(34, 197, 94, 0.1); }
+.legal-toolbar { display: grid; gap: 10px; }
+.legal-search input, .legal-comparison select { width: 100%; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 6px; padding: 10px 11px; background: #050912; color: #e2e8f0; }
+.legal-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.legal-filters button { border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 999px; padding: 5px 9px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 12px; }
+.legal-filters button.active { border-color: rgba(34, 211, 238, 0.5); background: rgba(34, 211, 238, 0.08); color: #a5f3fc; }
+.legal-clause-list { display: grid; gap: 10px; }
+.legal-clause-card { border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 7px; padding: 14px; background: rgba(15, 23, 42, 0.34); }
+.legal-clause-card-heading { display: flex; justify-content: space-between; gap: 12px; }
+.legal-category { color: #67e8f9; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.legal-clause-card > p { margin: 9px 0; color: #cbd5e1; line-height: 1.55; }
+.legal-clause-details { display: flex; flex-wrap: wrap; gap: 9px 18px; margin: 0; }
+.legal-clause-details div { display: flex; gap: 5px; font-size: 12px; }
+.legal-clause-details dt { color: #64748b; }
+.legal-clause-details dd { margin: 0; color: #cbd5e1; text-transform: capitalize; }
+.legal-clause-card blockquote { margin: 11px 0 0; border-left: 2px solid #22d3ee; padding-left: 10px; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+.legal-recommendation { color: #fcd34d !important; font-size: 12px; }
+.legal-empty { margin: 0; color: #64748b; }
+.legal-comparison { display: grid; gap: 12px; border-top: 1px solid rgba(148, 163, 184, 0.16); padding-top: 20px; }
+.legal-comparison > div > p { margin: 7px 0 0; color: #94a3b8; }
+.legal-comparison-controls { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 10px; }
+.legal-comparison-controls label { display: grid; gap: 5px; color: #94a3b8; font-size: 12px; }
+.legal-comparison-error { margin: 0; color: #fca5a5; }
+.legal-comparison-result { display: grid; gap: 8px; }
+.legal-comparison-result > p { margin: 0; color: #cbd5e1; }
+.legal-comparison-finding { display: grid; grid-template-columns: auto minmax(110px, 0.3fr) 1fr; gap: 10px; align-items: start; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 6px; padding: 10px; }
+.legal-comparison-finding div { display: grid; gap: 3px; color: #e2e8f0; }
+.legal-comparison-finding div span { color: #64748b; font-size: 11px; }
+.legal-comparison-finding p { margin: 0; color: #cbd5e1; font-size: 12px; line-height: 1.5; }
+.legal-comparison-finding em { color: #94a3b8; font-style: normal; }
+
 .tw-drawer-backdrop { position: fixed; z-index: 50; inset: 0; display: flex; justify-content: flex-end; background: rgba(0, 0, 0, 0.62); }
 .tw-drawer { display: flex; width: min(520px, 100%); height: 100%; flex-direction: column; padding: 24px; background: #080e19; box-shadow: -18px 0 50px rgba(0, 0, 0, 0.4); }
 .tw-drawer header, .tw-drawer footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -1673,6 +1712,8 @@ select {
   .tw-extraction aside { grid-template-columns: repeat(2, 1fr); }
   .tw-dashboard { grid-template-columns: repeat(3, 1fr); }
   .tw-payment-form { grid-template-columns: repeat(3, 1fr); }
+  .legal-comparison-controls { grid-template-columns: 1fr 1fr; }
+  .legal-comparison-controls button { grid-column: 1 / -1; }
 }
 
 @media (max-width: 680px) {
@@ -1696,4 +1737,6 @@ select {
   .tw-extraction aside { grid-template-columns: 1fr; }
   .tw-timeline li { grid-template-columns: 16px 1fr; }
   .tw-timeline time { grid-column: 2; }
+  .legal-comparison-controls, .legal-comparison-finding { grid-template-columns: 1fr; }
+  .legal-comparison-controls button { grid-column: auto; }
 }

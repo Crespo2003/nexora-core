@@ -10,6 +10,10 @@ type DiagnosticDetails = {
   attempt?: number;
   statusCode?: number;
   requestId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedRequestCostUsd?: number;
   provider?: 'openai' | 'deterministic';
   fallbackReason?: string | null;
   persisted?: boolean;

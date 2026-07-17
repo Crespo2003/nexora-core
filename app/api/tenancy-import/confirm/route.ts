@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     if (clientWorkspaceId && clientWorkspaceId !== workspaceId) {
       return NextResponse.json({ error: 'workspace-mismatch', stage: 'authorization' }, { status: 403 });
     }
-    const imported = await supabase.rpc('sprint_011_import_tenancy_legal_intelligence', {
+    const imported = await supabase.rpc('sprint_015_import_tenancy_legal_intelligence', {
       p_workspace_id: workspaceId,
       p_payload: { tenancy, collection, document, extraction }
     });
