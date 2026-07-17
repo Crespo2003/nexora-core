@@ -52,7 +52,16 @@ const structuredAgreement: TenancyLegalIntelligence = {
 };
 
 const structuredResponse = async () => new Response(JSON.stringify({
-  output: [{ content: [{ type: 'output_text', text: JSON.stringify(structuredAgreement) }] }]
+  status: 'completed',
+  output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+    document: { type: structuredAgreement.document_type, language: 'English', summary: '' },
+    confidence: structuredAgreement.confidence,
+    tenant: { name: structuredAgreement.tenant.name, company: structuredAgreement.tenant.company, identification: structuredAgreement.tenant.ic_passport, phone: structuredAgreement.tenant.phone, email: structuredAgreement.tenant.email },
+    landlord: { name: structuredAgreement.landlord.name, company: structuredAgreement.landlord.company, identification: structuredAgreement.landlord.ic_passport, phone: structuredAgreement.landlord.phone, email: structuredAgreement.landlord.email },
+    property: { name: structuredAgreement.property.name, unit_number: structuredAgreement.property.unit, address: structuredAgreement.property.address, property_type: structuredAgreement.property.type, build_up: structuredAgreement.property.build_up, land_area: structuredAgreement.property.land_area, car_parks: structuredAgreement.property.car_parks }, financial: structuredAgreement.financial, tenancy: structuredAgreement.tenancy,
+    utilities: structuredAgreement.utilities, legal: structuredAgreement.legal, clauses: structuredAgreement.special_clauses,
+    risks: [], warnings: []
+  }) }] }]
 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
 test('extracts the required tenancy agreement fields without inventing missing values', async () => {

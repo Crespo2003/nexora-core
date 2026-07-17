@@ -17,6 +17,12 @@ type DiagnosticDetails = {
   errorName?: string;
   errorCode?: string;
   upstreamRequestId?: string;
+  responseStatus?: string;
+  incompleteReason?: string;
+  outputItemTypes?: string[];
+  outputTextLength?: number;
+  parseResult?: string;
+  validationIssuePaths?: string[];
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;

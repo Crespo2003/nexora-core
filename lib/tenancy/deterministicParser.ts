@@ -12,16 +12,21 @@ export function extractTenancyDeterministically(
   advancedAiConfigured = false
 ): TenancyExtraction {
   const text = rawText.replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  const first = (patterns: RegExp[], confidence: Confidence = 'medium'): ExtractedField => {
+  const first = (
+    patterns: RegExp[],
+    confidence: Confidence = 'medium',
+    accept: (value: string) => boolean = () => true
+  ): ExtractedField => {
     for (const pattern of patterns) {
       const match = text.match(pattern);
-      if (match?.[1]) return { value: match[1].trim(), confidence };
+      const value = match?.[1]?.replace(/\s+/g, ' ').trim();
+      if (value && accept(value)) return { value, confidence };
     }
     return empty();
   };
   const money = (patterns: RegExp[]) => {
-    const found = first(patterns);
-    return found.value ? { ...found, value: found.value.replace(/RM/gi, '').replace(/,/g, '').trim() } : found;
+    const found = first(patterns, 'medium', (value) => /^(?:RM|MYR)\s*\d/i.test(value));
+    return found.value ? { ...found, value: found.value.replace(/^(?:RM|MYR)\s*/i, '').replace(/,/g, '').trim() } : found;
   };
   const date = (patterns: RegExp[]) => normalizeDateField(first(patterns));
   const clause = (keyword: RegExp) => {
@@ -87,13 +92,24 @@ export function extractTenancyDeterministically(
   };
 }
 
-function partyFields(label: string, first: (patterns: RegExp[], confidence?: Confidence) => ExtractedField) {
+function partyFields(
+  label: string,
+  first: (patterns: RegExp[], confidence?: Confidence, accept?: (value: string) => boolean) => ExtractedField
+) {
   return {
-    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i')]),
+    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i')], 'medium', isSafePartyName),
     idNo: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:ic|nric|passport|company no\\.?)\\s*[:\\-]\\s*([A-Z0-9\\-]+)`, 'i')]),
     phone: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:phone|tel|contact)\\s*[:\\-]\\s*([+0-9 \\-]+)`, 'i')]),
     email: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:email|e-mail)\\s*[:\\-]\\s*([^\\s\\n]+@[^\\s\\n]+)`, 'i')])
   };
+}
+
+function isSafePartyName(value: string): boolean {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length < 2 || compact.length > 120 || /^\d+$/.test(compact)) return false;
+  if (/^(?:name|date|signature|tenant|landlord|owner|witness|page)\b/i.test(compact)) return false;
+  if (/---\s*page\s*\d+\s*---|\bname\s*:\s*date\b|\bdate\s*:\s*signature\b/i.test(compact)) return false;
+  return !/^[\W_]+$/.test(compact);
 }
 
 function normalizeDateField(field: ExtractedField): ExtractedField {

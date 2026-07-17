@@ -26,6 +26,12 @@ export type TenancyExtractionFallbackReason =
   | 'openai_server_error'
   | 'openai_timeout'
   | 'openai_request_failed'
+  | 'openai_refusal'
+  | 'openai_incomplete'
+  | 'openai_empty_response'
+  | 'openai_malformed_json'
+  | 'openai_schema_mismatch'
+  | 'openai_truncated'
   | 'invalid_ai_response'
   | 'ocr_failed'
   | 'text_extraction_failed';
@@ -225,6 +231,12 @@ function extractionErrorCode(error: unknown): TenancyExtractionFallbackReason {
   if (code === 'openai_bad_request') return 'openai_bad_request';
   if (code === 'openai_server_error') return 'openai_server_error';
   if (code === 'openai_timeout' || code === 'openai-timeout') return 'openai_timeout';
+  if (code === 'openai_refusal') return 'openai_refusal';
+  if (code === 'openai_incomplete') return 'openai_incomplete';
+  if (code === 'openai_empty_response') return 'openai_empty_response';
+  if (code === 'openai_malformed_json') return 'openai_malformed_json';
+  if (code === 'openai_schema_mismatch') return 'openai_schema_mismatch';
+  if (code === 'openai_truncated') return 'openai_truncated';
   if (code === 'invalid_ai_response' || /invalid-extraction|empty-extraction|refused-extraction/.test(code)) return 'invalid_ai_response';
   if (code === 'ocr_failed' || /ocr/.test(code)) return 'ocr_failed';
   if (code === 'text_extraction_failed' || /document-text|insufficient-document-text|empty-extraction|unreadable-document/.test(code)) return 'text_extraction_failed';

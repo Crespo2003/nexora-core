@@ -4,6 +4,11 @@ import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
 import { logExtractionDiagnostic } from './extractionDiagnostics';
+import {
+  canonicalTenancyExtractionSchema,
+  parseOpenAITenancyResponse,
+  type CanonicalTenancyExtraction
+} from './tenancyExtractionContract';
 
 export type LegalParty = {
   name: string;
@@ -119,7 +124,6 @@ type ExtractTenancyOptions = {
   requestId?: string;
 };
 
-const stringSchema = { type: 'string' } as const;
 const confidencePaths = [
   'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.phone', 'tenant.email',
   'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.phone', 'landlord.email',
@@ -131,118 +135,8 @@ const confidencePaths = [
   'legal.termination', 'legal.viewing_rights', 'legal.insurance', 'legal.maintenance', 'legal.access_card', 'legal.car_park',
   'special_clauses'
 ] as const;
-const partySchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['name', 'company', 'ic_passport', 'phone', 'email'],
-  properties: {
-    name: stringSchema,
-    company: stringSchema,
-    ic_passport: stringSchema,
-    phone: stringSchema,
-    email: stringSchema
-  }
-} as const;
-const legalRiskSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['code', 'severity', 'category', 'reason', 'recommendation', 'source_page', 'source_excerpt'],
-  properties: {
-    code: stringSchema,
-    severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
-    category: stringSchema,
-    reason: stringSchema,
-    recommendation: stringSchema,
-    source_page: { type: ['integer', 'null'], minimum: 1 },
-    source_excerpt: stringSchema
-  }
-} as const;
-const fieldEvidenceItemSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['value', 'confidence', 'source_page', 'source_excerpt'],
-  properties: {
-    value: stringSchema,
-    confidence: { type: 'number', minimum: 0, maximum: 100 },
-    source_page: { type: ['integer', 'null'], minimum: 1 },
-    source_excerpt: stringSchema
-  }
-} as const;
-
-export const tenancyLegalIntelligenceSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
-  ],
-  properties: {
-    document_type: stringSchema,
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
-    tenant: partySchema,
-    landlord: partySchema,
-    property: {
-      type: 'object', additionalProperties: false,
-      required: ['name', 'unit', 'address', 'type', 'build_up', 'land_area', 'car_parks'],
-      properties: {
-        name: stringSchema, unit: stringSchema, address: stringSchema, type: stringSchema,
-        build_up: stringSchema, land_area: stringSchema, car_parks: stringSchema
-      }
-    },
-    financial: {
-      type: 'object', additionalProperties: false,
-      required: ['monthly_rental', 'security_deposit', 'utility_deposit', 'access_card_deposit', 'car_park_deposit', 'stamp_duty'],
-      properties: {
-        monthly_rental: { type: 'number', minimum: 0 },
-        security_deposit: { type: 'number', minimum: 0 },
-        utility_deposit: { type: 'number', minimum: 0 },
-        access_card_deposit: { type: 'number', minimum: 0 },
-        car_park_deposit: { type: 'number', minimum: 0 },
-        stamp_duty: { type: 'number', minimum: 0 }
-      }
-    },
-    tenancy: {
-      type: 'object', additionalProperties: false,
-      required: ['commencement_date', 'expiry_date', 'renewal_option', 'notice_period', 'payment_due_day'],
-      properties: {
-        commencement_date: stringSchema, expiry_date: stringSchema, renewal_option: stringSchema,
-        notice_period: stringSchema, payment_due_day: stringSchema
-      }
-    },
-    utilities: {
-      type: 'object', additionalProperties: false,
-      required: ['tnb', 'water', 'iwk', 'wifi'],
-      properties: { tnb: stringSchema, water: stringSchema, iwk: stringSchema, wifi: stringSchema }
-    },
-    legal: {
-      type: 'object', additionalProperties: false,
-      required: ['signatures', 'witnesses', 'stamp_duty', 'inventory', 'restrictions', 'late_payment', 'termination', 'viewing_rights', 'insurance', 'maintenance', 'access_card', 'car_park'],
-      properties: {
-        signatures: stringSchema, witnesses: stringSchema, stamp_duty: stringSchema,
-        inventory: stringSchema, restrictions: { type: 'array', items: stringSchema },
-        late_payment: stringSchema, termination: stringSchema, viewing_rights: stringSchema,
-        insurance: stringSchema, maintenance: stringSchema, access_card: stringSchema, car_park: stringSchema
-      }
-    },
-    special_clauses: { type: 'array', items: stringSchema },
-    risks: { type: 'array', items: legalRiskSchema },
-    warnings: { type: 'array', items: stringSchema },
-    field_confidence: {
-      type: 'object',
-      description: 'Confidence percentage from 0 to 100 for every scalar or array field, keyed by dot path.',
-      additionalProperties: false,
-      required: confidencePaths,
-      properties: Object.fromEntries(confidencePaths.map((path) => [path, { type: 'number', minimum: 0, maximum: 100 }]))
-    },
-    field_evidence: {
-      type: 'object',
-      description: 'Value, confidence, source page and verbatim source excerpt for every extracted field.',
-      additionalProperties: false,
-      required: confidencePaths,
-      properties: Object.fromEntries(confidencePaths.map((path) => [path, fieldEvidenceItemSchema]))
-    }
-  }
-} as const;
+/** @deprecated Model-facing callers use canonicalTenancyExtractionSchema directly. */
+export const tenancyLegalIntelligenceSchema = canonicalTenancyExtractionSchema;
 
 const extractionInstructions = `You are Nexora AI Legal Intelligence, a specialist in Malaysian tenancy agreements.
 Read every supplied word. Extract facts only from the agreement; never infer identity, contact, property, money, or legal terms that are absent.
@@ -250,14 +144,13 @@ Understand English, Simplified or Traditional Chinese, Bahasa Malaysia, and mixe
 Classify the premises as Residential, Commercial, Industrial, Office, Retail, Bungalow, Embassy, Factory, Warehouse, Shoplot, or the most precise stated type.
 Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM symbol or commas.
 Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is absent or ambiguous.
-Use empty strings, zero, and empty arrays for facts that are not stated.
+Use empty strings, null money values, and empty arrays for facts that are not stated.
 Preserve material special clauses as concise complete statements.
 Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
-Populate field_confidence with a 0-100 percentage for every extracted scalar and array field using its dot path, for example tenant.name, financial.monthly_rental, legal.witnesses and special_clauses. Use 0 for absent fields.
-Populate field_evidence for every field path. Value must match the normalized extracted value, source_page must use the nearest --- PAGE N --- marker or null when pages are unavailable, and source_excerpt must be a short verbatim excerpt from the document. Empty fields must have confidence 0, source_page null, and an empty source_excerpt.
-Every risk must include a category and the supporting source page and verbatim excerpt when the issue is based on a clause. Missing-clause risks must use null and an empty excerpt.
+Return the canonical schema exactly. It has document, confidence, tenant, landlord, property, financial, tenancy, utilities, legal, clauses, risks, and warnings. Do not add fields.
+Each risk must include a stable snake_case code, severity, category, evidence-based reason, and practical recommendation.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
 Return only the requested JSON schema.`;
@@ -306,7 +199,7 @@ export async function extractTenancyText(
 
   const model = options.model?.trim() || getOpenAiConfiguration().tenancyModel;
   const chunks = splitTenancyDocument(normalizedText, options.maxChunkCharacters);
-  const partials: TenancyLegalIntelligence[] = [];
+  const partials: CanonicalTenancyExtraction[] = [];
 
   for (let index = 0; index < chunks.length; index += 1) {
     partials.push(await requestStructuredExtraction({
@@ -333,13 +226,13 @@ export async function extractTenancyText(
       requestId: options.requestId,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
-  const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
+  const normalized = validateFieldEvidence(normalizeExtraction(mapCanonicalTenancyExtraction(reconciled)), normalizedText);
   const extraction = applyRiskEngine(normalized, normalizedText);
 
   return {
     extraction,
     rawText: normalizedText,
-    summary: createTenancySummary(extraction),
+    summary: reconciled.document.summary || createTenancySummary(extraction),
     chunkCount: chunks.length,
     model
   };
@@ -479,21 +372,21 @@ async function requestStructuredExtraction(input: {
   timeoutMs?: number;
   maxAttempts?: number;
   requestId?: string;
-}): Promise<TenancyLegalIntelligence> {
+}): Promise<CanonicalTenancyExtraction> {
   try {
     return await requestStructuredOpenAi({
       apiKey: input.apiKey,
       model: input.model,
       fetcher: input.fetcher,
       schemaName: 'malaysian_tenancy_legal_intelligence',
-      schema: tenancyLegalIntelligenceSchema,
+      schema: canonicalTenancyExtractionSchema,
       system: extractionInstructions,
       prompt: input.prompt,
       maxOutputTokens: input.maxOutputTokens ?? 12_000,
       timeoutMs: input.timeoutMs,
       maxAttempts: input.maxAttempts,
       requestId: input.requestId,
-      validate: validateExtractionShape
+      parseResponse: parseOpenAITenancyResponse
     });
   } catch (error) {
     if (error instanceof OpenAiClientError) throw new TenancyExtractionError(error.code);
@@ -501,13 +394,43 @@ async function requestStructuredExtraction(input: {
   }
 }
 
-function validateExtractionShape(value: unknown): TenancyLegalIntelligence {
-  if (!value || typeof value !== 'object') throw new Error('invalid-object');
-  const candidate = value as Partial<TenancyLegalIntelligence>;
-  if (!candidate.tenant || !candidate.landlord || !candidate.property || !candidate.financial || !candidate.tenancy || !candidate.utilities || !candidate.legal) {
-    throw new Error('missing-required-sections');
-  }
-  return candidate as TenancyLegalIntelligence;
+export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction): TenancyLegalIntelligence {
+  const confidence = Math.round(Math.max(0, Math.min(1, source.confidence)) * 100);
+  const presentConfidence = (value: unknown) => value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0) ? 0 : confidence;
+  const field_confidence = Object.fromEntries(confidencePaths.map((path) => [path, 0])) as FieldConfidence;
+  const extraction: TenancyLegalIntelligence = {
+    document_type: source.document.type,
+    confidence: source.confidence,
+    tenant: { name: source.tenant.name, company: source.tenant.company, ic_passport: source.tenant.identification, phone: source.tenant.phone, email: source.tenant.email },
+    landlord: { name: source.landlord.name, company: source.landlord.company, ic_passport: source.landlord.identification, phone: source.landlord.phone, email: source.landlord.email },
+    property: {
+      name: source.property.name,
+      unit: source.property.unit_number,
+      address: source.property.address,
+      type: source.property.property_type,
+      build_up: source.property.build_up,
+      land_area: source.property.land_area,
+      car_parks: source.property.car_parks
+    },
+    financial: {
+      monthly_rental: source.financial.monthly_rental ?? 0,
+      security_deposit: source.financial.security_deposit ?? 0,
+      utility_deposit: source.financial.utility_deposit ?? 0,
+      access_card_deposit: source.financial.access_card_deposit ?? 0,
+      car_park_deposit: source.financial.car_park_deposit ?? 0,
+      stamp_duty: source.financial.stamp_duty ?? 0
+    },
+    tenancy: { ...source.tenancy, payment_due_day: source.tenancy.payment_due_day ?? '' },
+    utilities: source.utilities,
+    legal: source.legal,
+    special_clauses: source.clauses,
+    risks: source.risks.map((risk) => ({ ...risk, source_page: null, source_excerpt: '' })),
+    warnings: source.warnings,
+    field_confidence,
+    field_evidence: {}
+  };
+  for (const path of confidencePaths) field_confidence[path] = presentConfidence(serializePathValue(extraction, path));
+  return extraction;
 }
 
 function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalIntelligence {
