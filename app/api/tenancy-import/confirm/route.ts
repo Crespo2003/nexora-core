@@ -14,7 +14,8 @@ type ImportDocument = {
 
 export async function POST(request: Request) {
   try {
-    const { tenancy, collection, document, extraction } = (await request.json()) as {
+    const { workspaceId: clientWorkspaceId, tenancy, collection, document, extraction } = (await request.json()) as {
+      workspaceId?: string;
       tenancy: TenancyPayload;
       collection: Omit<CollectionPayload, 'tenancy_id'>;
       document: ImportDocument;
@@ -32,6 +33,9 @@ export async function POST(request: Request) {
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
     if (auth instanceof Response) return auth;
     const { supabase, workspaceId } = auth;
+    if (clientWorkspaceId && clientWorkspaceId !== workspaceId) {
+      return NextResponse.json({ error: 'workspace-mismatch', stage: 'authorization' }, { status: 403 });
+    }
     const imported = await supabase.rpc('sprint_011_import_tenancy_legal_intelligence', {
       p_workspace_id: workspaceId,
       p_payload: { tenancy, collection, document, extraction }
