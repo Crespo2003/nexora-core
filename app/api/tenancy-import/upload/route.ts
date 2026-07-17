@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { extractTenancyFile } from '../../../../lib/ai/tenancyExtractor';
 import { validateFileSignature, workspaceStoragePath } from '../../../../lib/documents/upload';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { getOpenAiConfiguration } from '../../../../lib/ai/openAiConfig';
+import { logExtractionDiagnostic, logExtractionFailure } from '../../../../lib/ai/extractionDiagnostics';
 
 const maxUploadBytes = 10 * 1024 * 1024;
 const storageBucket = 'real-estate-documents';
@@ -18,6 +20,7 @@ function sanitizeStorageFilename(filename: string): string {
 export async function POST(request: Request) {
   let uploadedPath: string | null = null;
   let supabase: any;
+  logExtractionDiagnostic('route_entered');
 
   try {
     const requestSizeError = rejectOversizedRequest(request, maxUploadBytes + 1024 * 1024);
@@ -47,6 +50,14 @@ export async function POST(request: Request) {
     if (!isPdf && !isDocx && !isTxt) {
       return NextResponse.json({ error: 'Unsupported file type.', stage: 'upload' }, { status: 400 });
     }
+    const config = getOpenAiConfiguration();
+    const fileType = isPdf ? 'pdf' : isDocx ? 'docx' : 'txt';
+    logExtractionDiagnostic('file_validated', {
+      fileType,
+      openAiConfigured: config.configured,
+      tenancyModel: config.tenancyModel,
+      ocrModel: config.ocrModel
+    });
 
     const storagePath = workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -76,6 +87,7 @@ export async function POST(request: Request) {
 
     if (upload.error) throw upload.error;
     uploadedPath = storagePath;
+    logExtractionDiagnostic('document_persistence', { persisted: true, fileType });
 
     let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
     try {
@@ -108,6 +120,8 @@ export async function POST(request: Request) {
       if (bundle.error) throw bundle.error;
       uploadedPath = null;
       const saved = bundle.data as { document: { id: string }; extraction: { id: string } };
+      logExtractionFailure('extraction_failed', technicalReference);
+      logExtractionDiagnostic('document_persistence', { persisted: true, fallbackReason: technicalReference });
       return NextResponse.json({
         error: 'document-extraction-failed', stage: 'extraction', documentId: saved.document.id,
         extractionId: saved.extraction.id, retryAllowed: true, rollbackStatus: 'document-preserved',
@@ -119,8 +133,28 @@ export async function POST(request: Request) {
       }, { status: 422 });
     }
 
+    logExtractionDiagnostic('extraction_completed', {
+      fileType,
+      textLength: extraction.rawText.length,
+      usedOcr: extraction.document.usedOcr,
+      openAiConfigured: config.configured,
+      tenancyModel: config.tenancyModel,
+      provider: extraction.provider,
+      fallbackReason: extraction.fallbackReason
+    });
+
     return NextResponse.json({
+      success: true,
+      provider: extraction.provider,
+      model: extraction.provider === 'openai' ? extraction.document.model : null,
+      fallbackUsed: extraction.fallbackUsed,
+      fallbackReason: extraction.fallbackReason,
+      documentId: String(upload.data?.id ?? upload.data?.path ?? ''),
       extraction,
+      summary: extraction.summary,
+      risks: extraction.legalIntelligence.risks,
+      warnings: extraction.legalIntelligence.warnings,
+      confidence: extraction.legalIntelligence.confidence,
       document: {
         originalFilename: file.name,
         storagePath,
@@ -132,13 +166,13 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    console.error('Tenancy document upload/parse failed');
+    logExtractionFailure('route_failed', 'upload_or_persistence_failed');
 
     if (uploadedPath) {
       try {
         await supabase?.storage.from(storageBucket).remove([uploadedPath]);
       } catch (cleanupError) {
-        console.error('Tenancy document upload cleanup failed');
+        logExtractionFailure('document_cleanup_failed', 'storage_cleanup_failed');
       }
     }
 

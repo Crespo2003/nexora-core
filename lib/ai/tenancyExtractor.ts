@@ -3,5 +3,6 @@ export {
   extractTenancyFile,
   type Confidence,
   type ExtractedField,
-  type TenancyExtraction
+  type TenancyExtraction,
+  type TenancyExtractionFallbackReason
 } from '../tenancy/parser';

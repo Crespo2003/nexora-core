@@ -95,15 +95,10 @@ test('reports missing OCR configuration and unreadable documents without fake su
 });
 
 test('handles malformed OCR responses and provider timeout safely', async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async () => new Response(JSON.stringify({ output: [{ content: [{}] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    assert.equal((await new OpenAiOcrProvider('synthetic-key').extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-malformed-or-empty-response');
-    globalThis.fetch = async () => { throw new DOMException('Synthetic timeout', 'AbortError'); };
-    assert.equal((await new OpenAiOcrProvider('synthetic-key').extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-provider-timeout');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const malformed: typeof fetch = async () => new Response(JSON.stringify({ output: [{ content: [{}] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  assert.equal((await new OpenAiOcrProvider('synthetic-key', 'gpt-4.1-mini', malformed).extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-malformed-or-empty-response');
+  const timeout: typeof fetch = async () => { throw new DOMException('Synthetic timeout', 'AbortError'); };
+  assert.equal((await new OpenAiOcrProvider('synthetic-key', 'gpt-4.1-mini', timeout).extractText({ buffer: Buffer.from('image'), mimeType: 'image/png', filename: 'scan.png' })).error, 'ocr-provider-timeout');
 });
 
 test('enforces file signatures, extensions, size, page and duplicate foundations', () => {

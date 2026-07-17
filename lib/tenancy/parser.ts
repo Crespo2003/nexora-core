@@ -7,6 +7,7 @@ import {
   type TenancyProcessingResult
 } from '../ai/extractTenancy';
 import { extractTenancyDeterministically } from './deterministicParser';
+import { getOpenAiConfiguration } from '../ai/openAiConfig';
 
 export type Confidence = 'high' | 'medium' | 'low';
 
@@ -14,6 +15,14 @@ export type ExtractedField = {
   value: string;
   confidence: Confidence;
 };
+
+export type TenancyExtractionFallbackReason =
+  | 'openai_not_configured'
+  | 'openai_timeout'
+  | 'openai_request_failed'
+  | 'invalid_ai_response'
+  | 'ocr_failed'
+  | 'text_extraction_failed';
 
 export type TenancyExtraction = {
   property: {
@@ -68,12 +77,15 @@ export type TenancyExtraction = {
     usedOcr: boolean;
     pageCount: number | null;
     chunkCount: number;
-    model: string;
-    fallbackReason?: string;
+    model: string | null;
+    fallbackReason: TenancyExtractionFallbackReason | null;
   };
   rawText: string;
   summary: string;
   advancedAiConfigured: boolean;
+  provider: 'openai' | 'deterministic';
+  fallbackUsed: boolean;
+  fallbackReason: TenancyExtractionFallbackReason | null;
   legalIntelligence: TenancyLegalIntelligence;
 };
 
@@ -85,11 +97,13 @@ export async function extractTenancyDetails(
   mimeType: string,
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
+  const aiConfigured = Boolean(options.apiKey?.trim()) || getOpenAiConfiguration().configured;
   try {
     const result = await extractTenancyText(rawText, originalFilename, options);
     return toLegacyExtraction({ ...result, pageCount: null, usedOcr: false }, originalFilename, mimeType);
   } catch (error) {
-    return extractTenancyDeterministically(rawText, originalFilename, mimeType, extractionErrorCode(error));
+    const reason = extractionErrorCode(error);
+    return extractTenancyDeterministically(rawText, originalFilename, mimeType, reason, aiConfigured && reason !== 'openai_not_configured');
   }
 }
 
@@ -98,12 +112,16 @@ export async function extractTenancyFile(
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
   const text = await extractDocumentText(input, options.ocrProvider);
-  if (text.status !== 'completed' || !text.text.trim()) throw new Error(text.error || 'document-text-extraction-failed');
+  if (text.status !== 'completed' || !text.text.trim()) {
+    throw new Error(text.usedOcr || /ocr/i.test(text.error) ? 'ocr_failed' : 'text_extraction_failed');
+  }
+  const aiConfigured = Boolean(options.apiKey?.trim()) || getOpenAiConfiguration().configured;
   try {
     const result = await extractTenancyText(text.text, input.filename, options);
     return toLegacyExtraction({ ...result, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
   } catch (error) {
-    const fallback = extractTenancyDeterministically(text.text, input.filename, input.mimeType, extractionErrorCode(error));
+    const reason = extractionErrorCode(error);
+    const fallback = extractTenancyDeterministically(text.text, input.filename, input.mimeType, reason, aiConfigured && reason !== 'openai_not_configured');
     fallback.document.usedOcr = text.usedOcr;
     fallback.document.pageCount = text.pageCount;
     return fallback;
@@ -178,17 +196,27 @@ function toLegacyExtraction(
       usedOcr: result.usedOcr,
       pageCount: result.pageCount,
       chunkCount: result.chunkCount,
-      model: result.model
+      model: result.model,
+      fallbackReason: null
     },
     rawText: result.rawText,
     summary: result.summary,
     advancedAiConfigured: true,
+    provider: 'openai',
+    fallbackUsed: false,
+    fallbackReason: null,
     legalIntelligence: legal
   };
 }
 
-function extractionErrorCode(error: unknown): string {
-  return error instanceof Error ? error.message : 'advanced-ai-extraction-failed';
+function extractionErrorCode(error: unknown): TenancyExtractionFallbackReason {
+  const code = error instanceof Error ? error.message : '';
+  if (code === 'openai_not_configured' || code === 'openai-not-configured') return 'openai_not_configured';
+  if (code === 'openai_timeout' || code === 'openai-timeout') return 'openai_timeout';
+  if (code === 'invalid_ai_response' || /invalid-extraction|empty-extraction|refused-extraction/.test(code)) return 'invalid_ai_response';
+  if (code === 'ocr_failed' || /ocr/.test(code)) return 'ocr_failed';
+  if (code === 'text_extraction_failed' || /document-text|insufficient-document-text|empty-extraction|unreadable-document/.test(code)) return 'text_extraction_failed';
+  return 'openai_request_failed';
 }
 
 function confidenceLevel(value: number): Confidence {
