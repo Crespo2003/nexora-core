@@ -1,23 +1,30 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Confidence, TenancyExtraction } from '../lib/ai/tenancyExtractor';
 import {
-  compareDisplayDates,
   currentIsoDate,
   currentIsoMonth,
-  displayDateToIso,
   isoMonthToDisplayMonth,
   isoToDisplayDate
 } from '../lib/dates/formatDate';
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
+import {
+  editableTenancyFormFields,
+  mapTenancyExtractionToForm,
+  mergeMappedFormPreservingEdits,
+  normalizeDateForInput,
+  type EditableTenancyFormField,
+  type MappedMoney,
+  type TenancyMappedForm
+} from '../lib/tenancy/mapTenancyExtractionToForm';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
 type ImportState = 'idle' | 'uploading' | 'parsing' | 'extracting' | 'review' | 'saving' | 'success' | 'failed';
-type FieldKey = keyof TenancyForm;
+type FieldKey = EditableTenancyFormField;
 
 type Notice = {
   tone: NoticeTone;
@@ -108,12 +115,8 @@ type UploadedDocument = {
   documentHash: string;
 };
 
-type TenancyForm = Omit<Tenancy, 'id' | 'status'>;
-
-type ImportReviewForm = TenancyForm & {
-  rawText: string;
-  summary: string;
-};
+type TenancyForm = TenancyMappedForm;
+type ImportReviewForm = TenancyMappedForm;
 
 const maxUploadBytes = 10 * 1024 * 1024;
 const todayIso = currentIsoDate();
@@ -128,35 +131,62 @@ const currency = new Intl.NumberFormat('en-MY', {
 const getSupabaseClient = getBrowserSupabaseClient;
 
 function emptyForm(): TenancyForm {
-  const today = isoToDisplayDate(todayIso);
-
   return {
-    tenant: '',
-    tenantIdNo: '',
+    tenantName: '',
+    tenantCompany: '',
+    tenantIdentification: '',
     tenantPhone: '',
     tenantEmail: '',
-    landlord: '',
-    landlordIdNo: '',
+    landlordName: '',
+    landlordCompany: '',
+    landlordIdentification: '',
     landlordPhone: '',
     landlordEmail: '',
-    property: '',
-    unitNo: '',
-    propertyAddress: '',
+    propertyName: '',
+    unitNumber: '',
+    fullAddress: '',
     propertyType: '',
-    monthlyRental: 0,
-    securityDeposit: 0,
-    utilityDeposit: 0,
-    accessCardDeposit: 0,
-    carParkRemoteDeposit: 0,
-    commencementDate: today,
-    expiryDate: today,
+    buildUp: '',
+    landArea: '',
+    carParks: '',
+    monthlyRental: '',
+    securityDeposit: '',
+    generalUtilityDeposit: '',
+    accessCardDeposit: '',
+    carParkRemoteDeposit: '',
+    stampDuty: '',
+    commencementDate: '',
+    expiryDate: '',
     renewalOption: '',
     noticePeriod: '',
-    renewalReminder: today,
+    paymentDueDay: '',
+    tnbResponsibility: '',
+    waterResponsibility: '',
+    iwkResponsibility: '',
+    wifiResponsibility: '',
+    witnesses: '',
+    inventory: '',
+    latePayment: '',
+    termination: '',
+    viewingRights: '',
+    maintenance: '',
+    insurance: '',
+    renewalReminder: '',
     signedTa: '',
     renewalHistory: '',
     specialClauses: '',
-    notes: ''
+    notes: '',
+    summary: '',
+    risks: [],
+    warnings: [],
+    confidence: 0,
+    fieldConfidence: {},
+    sourceReferences: {},
+    lowConfidenceFields: [],
+    rawAiJson: {},
+    rawText: '',
+    documentId: '',
+    workspaceId: ''
   };
 }
 
@@ -235,8 +265,8 @@ function mapTenancy(row: Record<string, unknown>): Tenancy {
     utilityDeposit: cleanNumber(row.utility_deposit),
     accessCardDeposit: cleanNumber(row.access_card_deposit),
     carParkRemoteDeposit: cleanNumber(row.car_park_remote_deposit),
-    commencementDate: String(row.commencement_date ?? todayIso),
-    expiryDate: String(row.expiry_date ?? todayIso),
+    commencementDate: normalizeDateForInput(String(row.commencement_date ?? '')),
+    expiryDate: normalizeDateForInput(String(row.expiry_date ?? '')),
     renewalOption: String(row.renewal_option ?? ''),
     noticePeriod: String(row.notice_period ?? ''),
     renewalReminder: String(row.renewal_reminder ?? ''),
@@ -280,54 +310,105 @@ function mapCollection(row: Record<string, unknown>): RentalCollection {
 
 function formFromTenancy(tenancy: Tenancy): TenancyForm {
   return {
-    ...tenancy,
-    commencementDate: isoToDisplayDate(tenancy.commencementDate),
-    expiryDate: isoToDisplayDate(tenancy.expiryDate),
-    renewalReminder: isoToDisplayDate(tenancy.renewalReminder)
+    ...emptyForm(),
+    tenantName: tenancy.tenant,
+    tenantIdentification: tenancy.tenantIdNo,
+    tenantPhone: tenancy.tenantPhone,
+    tenantEmail: tenancy.tenantEmail,
+    landlordName: tenancy.landlord,
+    landlordIdentification: tenancy.landlordIdNo,
+    landlordPhone: tenancy.landlordPhone,
+    landlordEmail: tenancy.landlordEmail,
+    propertyName: tenancy.property,
+    unitNumber: tenancy.unitNo,
+    fullAddress: tenancy.propertyAddress,
+    propertyType: tenancy.propertyType,
+    monthlyRental: tenancy.monthlyRental,
+    securityDeposit: tenancy.securityDeposit,
+    generalUtilityDeposit: tenancy.utilityDeposit,
+    accessCardDeposit: tenancy.accessCardDeposit,
+    carParkRemoteDeposit: tenancy.carParkRemoteDeposit,
+    commencementDate: normalizeDateForInput(tenancy.commencementDate),
+    expiryDate: normalizeDateForInput(tenancy.expiryDate),
+    renewalOption: tenancy.renewalOption,
+    noticePeriod: tenancy.noticePeriod,
+    renewalReminder: normalizeDateForInput(tenancy.renewalReminder),
+    signedTa: tenancy.signedTa,
+    renewalHistory: tenancy.renewalHistory,
+    specialClauses: tenancy.specialClauses,
+    notes: tenancy.notes
   };
 }
 
 function tenancyFromForm(form: TenancyForm, id: string): Tenancy {
   return {
-    ...form,
     id,
-    commencementDate: displayDateToIso(form.commencementDate) ?? todayIso,
-    expiryDate: displayDateToIso(form.expiryDate) ?? todayIso,
-    renewalReminder: form.renewalReminder ? displayDateToIso(form.renewalReminder) ?? '' : '',
+    tenant: form.tenantName,
+    tenantIdNo: form.tenantIdentification,
+    tenantPhone: form.tenantPhone,
+    tenantEmail: form.tenantEmail,
+    landlord: form.landlordName,
+    landlordIdNo: form.landlordIdentification,
+    landlordPhone: form.landlordPhone,
+    landlordEmail: form.landlordEmail,
+    property: form.propertyName,
+    unitNo: form.unitNumber,
+    propertyAddress: form.fullAddress,
+    propertyType: form.propertyType,
+    monthlyRental: moneyForPersistence(form.monthlyRental),
+    securityDeposit: moneyForPersistence(form.securityDeposit),
+    utilityDeposit: moneyForPersistence(form.generalUtilityDeposit),
+    accessCardDeposit: moneyForPersistence(form.accessCardDeposit),
+    carParkRemoteDeposit: moneyForPersistence(form.carParkRemoteDeposit),
+    commencementDate: normalizeDateForInput(form.commencementDate),
+    expiryDate: normalizeDateForInput(form.expiryDate),
+    renewalOption: form.renewalOption,
+    noticePeriod: form.noticePeriod,
+    renewalReminder: normalizeDateForInput(form.renewalReminder),
+    signedTa: form.signedTa,
+    renewalHistory: form.renewalHistory,
+    specialClauses: form.specialClauses,
+    notes: form.notes,
     status: 'active'
   };
 }
 
 function tenancyPayload(form: TenancyForm) {
   return {
-    tenant: form.tenant.trim(),
-    tenant_id_no: form.tenantIdNo.trim(),
+    tenant: form.tenantName.trim(),
+    tenant_id_no: form.tenantIdentification.trim(),
     tenant_phone: form.tenantPhone.trim(),
     tenant_email: form.tenantEmail.trim(),
-    landlord: form.landlord.trim(),
-    landlord_id_no: form.landlordIdNo.trim(),
+    tenant_company: form.tenantCompany.trim(),
+    landlord: form.landlordName.trim(),
+    landlord_id_no: form.landlordIdentification.trim(),
     landlord_phone: form.landlordPhone.trim(),
     landlord_email: form.landlordEmail.trim(),
-    property: form.property.trim(),
-    unit_no: form.unitNo.trim(),
-    property_address: form.propertyAddress.trim(),
+    property: form.propertyName.trim(),
+    unit_no: form.unitNumber.trim(),
+    property_address: form.fullAddress.trim(),
     property_type: form.propertyType.trim(),
-    monthly_rental: form.monthlyRental,
-    security_deposit: form.securityDeposit,
-    utility_deposit: form.utilityDeposit,
-    access_card_deposit: form.accessCardDeposit,
-    car_park_remote_deposit: form.carParkRemoteDeposit,
-    commencement_date: displayDateToIso(form.commencementDate),
-    expiry_date: displayDateToIso(form.expiryDate),
+    monthly_rental: moneyForPersistence(form.monthlyRental),
+    security_deposit: moneyForPersistence(form.securityDeposit),
+    utility_deposit: moneyForPersistence(form.generalUtilityDeposit),
+    access_card_deposit: moneyForPersistence(form.accessCardDeposit),
+    car_park_remote_deposit: moneyForPersistence(form.carParkRemoteDeposit),
+    rental_due_day: Number(form.paymentDueDay) || 1,
+    commencement_date: normalizeDateForInput(form.commencementDate) || null,
+    expiry_date: normalizeDateForInput(form.expiryDate) || null,
     renewal_option: form.renewalOption.trim(),
     notice_period: form.noticePeriod.trim(),
-    renewal_reminder: form.renewalReminder ? displayDateToIso(form.renewalReminder) : null,
+    renewal_reminder: normalizeDateForInput(form.renewalReminder) || null,
     signed_ta: form.signedTa.trim(),
     renewal_history: form.renewalHistory.trim(),
     special_clauses: form.specialClauses.trim(),
     notes: form.notes.trim(),
     status: 'active'
   };
+}
+
+function moneyForPersistence(value: MappedMoney): number {
+  return value === '' ? 0 : value;
 }
 
 function collectionForTenancy(tenancy: Tenancy): RentalCollection {
@@ -402,8 +483,8 @@ function mapDocument(row: Record<string, unknown>): TenancyDocument {
 function validateForm(form: TenancyForm, tenancies: Tenancy[], editingId: string | null, language: Language) {
   const t = getTranslations(language);
   const errors: Partial<Record<FieldKey, string>> = {};
-  const required: FieldKey[] = ['tenant', 'landlord', 'property'];
-  const moneyFields: FieldKey[] = ['monthlyRental', 'securityDeposit', 'utilityDeposit', 'accessCardDeposit', 'carParkRemoteDeposit'];
+  const required: FieldKey[] = ['tenantName', 'landlordName', 'propertyName'];
+  const moneyFields: FieldKey[] = ['monthlyRental', 'securityDeposit', 'generalUtilityDeposit', 'accessCardDeposit', 'carParkRemoteDeposit', 'stampDuty'];
 
   required.forEach((field) => {
     if (!String(form[field]).trim()) errors[field] = t.errors.required;
@@ -416,92 +497,49 @@ function validateForm(form: TenancyForm, tenancies: Tenancy[], editingId: string
   });
 
   if (!form.commencementDate) errors.commencementDate = t.errors.dateRequired;
-  else if (!displayDateToIso(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
+  else if (!normalizeDateForInput(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
 
   if (!form.expiryDate) errors.expiryDate = t.errors.dateRequired;
-  else if (!displayDateToIso(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
+  else if (!normalizeDateForInput(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
 
-  if (form.renewalReminder && !displayDateToIso(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
+  if (form.renewalReminder && !normalizeDateForInput(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
 
-  const termCompare = compareDisplayDates(form.expiryDate, form.commencementDate);
+  const termCompare = compareIsoDates(form.expiryDate, form.commencementDate);
   if (termCompare !== null && termCompare <= 0) errors.expiryDate = t.errors.expiryAfterCommencement;
 
-  const reminderVsExpiry = form.renewalReminder ? compareDisplayDates(form.renewalReminder, form.expiryDate) : null;
+  const reminderVsExpiry = form.renewalReminder ? compareIsoDates(form.renewalReminder, form.expiryDate) : null;
   if (reminderVsExpiry !== null && reminderVsExpiry >= 0) errors.renewalReminder = t.errors.reminderBeforeExpiry;
 
-  const reminderVsStart = form.renewalReminder ? compareDisplayDates(form.renewalReminder, form.commencementDate) : null;
+  const reminderVsStart = form.renewalReminder ? compareIsoDates(form.renewalReminder, form.commencementDate) : null;
   if (reminderVsStart !== null && reminderVsStart < 0) errors.renewalReminder = t.errors.reminderAfterCommencement;
 
   const duplicate = tenancies.some(
     (tenancy) =>
       tenancy.id !== editingId &&
-      tenancy.tenant.trim().toLowerCase() === form.tenant.trim().toLowerCase() &&
-      tenancy.property.trim().toLowerCase() === form.property.trim().toLowerCase() &&
-      tenancy.unitNo.trim().toLowerCase() === form.unitNo.trim().toLowerCase()
+      tenancy.tenant.trim().toLowerCase() === form.tenantName.trim().toLowerCase() &&
+      tenancy.property.trim().toLowerCase() === form.propertyName.trim().toLowerCase() &&
+      tenancy.unitNo.trim().toLowerCase() === form.unitNumber.trim().toLowerCase()
   );
 
-  if (duplicate) errors.property = t.errors.duplicateTenancy;
+  if (duplicate) errors.propertyName = t.errors.duplicateTenancy;
   return errors;
 }
 
-function fieldValue(extraction: TenancyExtraction, path: string): string {
-  const parts = path.split('.');
-  let current: unknown = extraction;
-  for (const part of parts) current = (current as Record<string, unknown>)?.[part];
-  return String((current as { value?: string })?.value ?? '');
-}
-
-function reviewFormFromExtraction(extraction: TenancyExtraction): ImportReviewForm {
-  const monthlyRental = cleanNumber(fieldValue(extraction, 'financial.monthlyRental'));
-
-  return {
-    ...emptyForm(),
-    tenant: fieldValue(extraction, 'tenant.name'),
-    tenantIdNo: fieldValue(extraction, 'tenant.idNo'),
-    tenantPhone: fieldValue(extraction, 'tenant.phone'),
-    tenantEmail: fieldValue(extraction, 'tenant.email'),
-    landlord: fieldValue(extraction, 'landlord.name'),
-    landlordIdNo: fieldValue(extraction, 'landlord.idNo'),
-    landlordPhone: fieldValue(extraction, 'landlord.phone'),
-    landlordEmail: fieldValue(extraction, 'landlord.email'),
-    property: fieldValue(extraction, 'property.propertyName'),
-    unitNo: fieldValue(extraction, 'property.unitNo'),
-    propertyAddress: fieldValue(extraction, 'property.fullAddress'),
-    propertyType: fieldValue(extraction, 'property.propertyType'),
-    monthlyRental,
-    securityDeposit: cleanNumber(fieldValue(extraction, 'financial.securityDeposit')),
-    utilityDeposit: cleanNumber(fieldValue(extraction, 'financial.utilityDeposit')),
-    accessCardDeposit: cleanNumber(fieldValue(extraction, 'financial.accessCardDeposit')),
-    carParkRemoteDeposit: cleanNumber(fieldValue(extraction, 'financial.carParkRemoteDeposit')),
-    commencementDate: fieldValue(extraction, 'dates.commencementDate') || emptyForm().commencementDate,
-    expiryDate: fieldValue(extraction, 'dates.expiryDate') || emptyForm().expiryDate,
-    renewalOption: fieldValue(extraction, 'dates.renewalOption'),
-    noticePeriod: fieldValue(extraction, 'dates.noticePeriod'),
-    renewalReminder: fieldValue(extraction, 'dates.renewalReminder'),
-    signedTa: extraction.document.originalFilename,
-    renewalHistory: fieldValue(extraction, 'clauses.renewalClause') || extraction.legalIntelligence.tenancy.renewal_option,
-    specialClauses: extraction.legalIntelligence.special_clauses.join('\n\n'),
-    notes: [
-      extraction.summary,
-      extraction.legalIntelligence.tenant.company ? `Tenant company: ${extraction.legalIntelligence.tenant.company}` : '',
-      extraction.legalIntelligence.landlord.company ? `Landlord company: ${extraction.legalIntelligence.landlord.company}` : '',
-      extraction.legalIntelligence.property.build_up ? `Build-up: ${extraction.legalIntelligence.property.build_up}` : '',
-      extraction.legalIntelligence.property.land_area ? `Land area: ${extraction.legalIntelligence.property.land_area}` : '',
-      extraction.legalIntelligence.property.car_parks ? `Car parks: ${extraction.legalIntelligence.property.car_parks}` : '',
-      extraction.legalIntelligence.risks.length ? `Risks:\n- ${extraction.legalIntelligence.risks.map((risk) => `[${risk.severity.toUpperCase()}] ${risk.reason} Recommendation: ${risk.recommendation}`).join('\n- ')}` : '',
-      extraction.legalIntelligence.warnings.length ? `Warnings:\n- ${extraction.legalIntelligence.warnings.join('\n- ')}` : ''
-    ].filter(Boolean).join('\n\n'),
-    rawText: extraction.rawText,
-    summary: extraction.summary
-  };
-}
-
 function reviewCorrections(extraction: TenancyExtraction, reviewed: ImportReviewForm): Record<string, { extracted: unknown; confirmed: unknown }> {
-  const original = reviewFormFromExtraction(extraction);
-  return Object.fromEntries(Object.keys(reviewed).flatMap((key) => {
-    const field = key as keyof ImportReviewForm;
-    return original[field] === reviewed[field] ? [] : [[key, { extracted: original[field], confirmed: reviewed[field] }]];
+  const original = mapTenancyExtractionToForm(extraction, { documentId: reviewed.documentId, workspaceId: reviewed.workspaceId });
+  return Object.fromEntries(editableTenancyFormFields.flatMap((field) => {
+    return original[field] === reviewed[field] ? [] : [[field, { extracted: original[field], confirmed: reviewed[field] }]];
   }));
+}
+
+function reviewedValues(form: TenancyForm): Record<string, string | number> {
+  return Object.fromEntries(editableTenancyFormFields.map((field) => [field, form[field]]));
+}
+
+function compareIsoDates(left: string, right: string): number | null {
+  const leftIso = normalizeDateForInput(left);
+  const rightIso = normalizeDateForInput(right);
+  return leftIso && rightIso ? leftIso.localeCompare(rightIso) : null;
 }
 
 export default function RentalCommandCentre() {
@@ -532,6 +570,7 @@ export default function RentalCommandCentre() {
   const [importFailedStage, setImportFailedStage] = useState('');
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | null>(null);
   const [documentViewStatus, setDocumentViewStatus] = useState('');
+  const userEditedFields = useRef<Set<EditableTenancyFormField>>(new Set());
 
   const selectedTenancy = tenancies.find((tenancy) => tenancy.id === selectedTenancyId) ?? tenancies[0] ?? null;
   const selectedCollections = collections.filter((collection) => collection.tenancyId === selectedTenancy?.id);
@@ -604,22 +643,34 @@ export default function RentalCommandCentre() {
   }
 
   function updateForm<K extends FieldKey>(field: K, value: TenancyForm[K]) {
+    userEditedFields.current.add(field);
     setForm((current) => ({ ...current, [field]: value }));
+    if (extraction) setReviewForm((current) => (current ? { ...current, [field]: value } : current));
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    setImportErrors((current) => ({ ...current, [field]: undefined }));
   }
 
   function updateReview<K extends FieldKey>(field: K, value: TenancyForm[K]) {
+    userEditedFields.current.add(field);
     setReviewForm((current) => (current ? { ...current, [field]: value } : current));
+    setForm((current) => ({ ...current, [field]: value }));
     setImportErrors((current) => ({ ...current, [field]: undefined }));
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
   }
 
   function resetForm() {
     setEditingTenancyId(null);
     setForm(emptyForm());
     setFieldErrors({});
+    userEditedFields.current.clear();
   }
 
   async function saveTenancy() {
+    if (!editingTenancyId && extraction && reviewForm && uploadedDocument) {
+      await confirmImport();
+      return;
+    }
+
     const errors = validateForm(form, tenancies, editingTenancyId, language);
     if (Object.keys(errors).length) {
       setFieldErrors(errors);
@@ -730,6 +781,7 @@ export default function RentalCommandCentre() {
     setEditingTenancyId(tenancy.id);
     setForm(formFromTenancy(tenancy));
     setFieldErrors({});
+    userEditedFields.current.clear();
     setSelectedTenancyId(tenancy.id);
     setPendingDeleteId(null);
   }
@@ -824,9 +876,17 @@ export default function RentalCommandCentre() {
       if (!response.ok || !payload.extraction) throw new Error(apiErrorMessage(payload.error ?? t.errors.parseFailed, language));
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
+      const mapped = mapTenancyExtractionToForm(parsed, {
+        documentId: String(payload.documentId ?? ''),
+        workspaceId
+      });
+      const reviewed = mergeMappedFormPreservingEdits(form, mapped, userEditedFields.current);
       setExtraction(parsed);
-      setReviewForm(reviewFormFromExtraction(parsed));
+      setForm(reviewed);
+      setReviewForm(reviewed);
+      setEditingTenancyId(null);
       setUploadedDocument(payload.document);
+      setFieldErrors({});
       setImportErrors({});
       setImportState('review');
       setNotice({ tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) });
@@ -850,7 +910,7 @@ export default function RentalCommandCentre() {
       return;
     }
 
-    const errors = validateForm(reviewForm, tenancies, null, language);
+    const errors = validateForm(form, tenancies, null, language);
     if (Object.keys(errors).length) {
       setImportErrors(errors);
       setNotice({ tone: 'error', message: Object.values(errors)[0] ?? t.errors.unknown });
@@ -862,25 +922,34 @@ export default function RentalCommandCentre() {
     setImportFailedStage('');
     let failedStage: string = t.importIntoNexora;
     try {
-      const localTenancy = tenancyFromForm(reviewForm, `tenancy-${crypto.randomUUID()}`);
+      const localTenancy = tenancyFromForm(form, `tenancy-${crypto.randomUUID()}`);
       const localCollection = collectionForTenancy(localTenancy);
       const response = await fetch('/api/tenancy-import/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tenancy: {
-            ...tenancyPayload(reviewForm),
-            tenant_company: extraction.legalIntelligence.tenant.company,
-            rental_due_day: Number(extraction.legalIntelligence.tenancy.payment_due_day) || 1
-          },
+          workspaceId,
+          documentId: form.documentId,
+          tenancy: tenancyPayload(form),
           collection: collectionPayloadWithoutTenancy(localCollection),
           document: uploadedDocument,
           extraction: {
             extractionStatus: extraction.document.extractionStatus,
             extractedJson: extraction.legalIntelligence,
-            rawText: reviewForm.rawText,
-            aiSummary: reviewForm.summary,
-            confidenceJson: { ...extraction, userCorrections: reviewCorrections(extraction, reviewForm) },
+            rawText: form.rawText,
+            aiSummary: form.summary,
+            confidenceJson: {
+              provider: extraction.provider,
+              model: extraction.document.model,
+              overallConfidence: form.confidence,
+              fieldConfidence: form.fieldConfidence,
+              sourceReferences: form.sourceReferences,
+              lowConfidenceFields: form.lowConfidenceFields,
+              finalReviewedValues: reviewedValues(form),
+              userCorrections: reviewCorrections(extraction, form),
+              documentId: form.documentId,
+              workspaceId
+            },
             extractionError: extraction.document.extractionStatus === 'unreadable' ? t.scannedWarning : null,
             model: extraction.document.model
           }
@@ -907,6 +976,7 @@ export default function RentalCommandCentre() {
       setReviewForm(null);
       setUploadedDocument(null);
       setImportState('success');
+      resetForm();
       setNotice({ tone: 'success', message: t.notices.importSaved });
     } catch (error) {
       setImportState('failed');
@@ -1012,13 +1082,16 @@ export default function RentalCommandCentre() {
                     </div>
                   )}
                   {reviewForm && (
-                    <TenancyFields
-                      form={reviewForm}
-                      errors={importErrors}
-                      language={language}
-                      onChange={updateReview}
-                      confidence={extraction}
-                    />
+                    <>
+                      <TenancyFields
+                        form={reviewForm}
+                        errors={importErrors}
+                        language={language}
+                        onChange={updateReview}
+                        fieldConfidence={reviewForm.fieldConfidence}
+                      />
+                      <ExtractionReviewDetails mapped={reviewForm} extraction={extraction} fallback={t.notDetected} />
+                    </>
                   )}
                   <details className="raw-text">
                     <summary>{t.rawExtractedText}</summary>
@@ -1040,7 +1113,7 @@ export default function RentalCommandCentre() {
                 </div>
                 {editingTenancyId && <button className="ghost-button" onClick={resetForm}>{t.cancel}</button>}
               </div>
-              <TenancyFields form={form} errors={fieldErrors} language={language} onChange={updateForm} />
+              <TenancyFields form={form} errors={fieldErrors} language={language} onChange={updateForm} fieldConfidence={extraction ? form.fieldConfidence : undefined} />
               <button className="primary-button" onClick={saveTenancy} disabled={operationId === 'save-tenancy'}>
                 {operationId === 'save-tenancy' ? t.saving : editingTenancyId ? t.saveTenancy : t.createTenancy}
               </button>
@@ -1197,46 +1270,92 @@ function TenancyFields({
   errors,
   language,
   onChange,
-  confidence
+  fieldConfidence
 }: {
   form: TenancyForm;
   errors: Partial<Record<FieldKey, string>>;
   language: Language;
   onChange: <K extends FieldKey>(field: K, value: TenancyForm[K]) => void;
-  confidence?: TenancyExtraction;
+  fieldConfidence?: Record<string, number>;
 }) {
   const t = getTranslations(language);
 
   return (
     <div className="form-grid">
-      <Field label={t.tenantName} value={form.tenant} placeholder={t.placeholders.tenant} error={errors.tenant} onChange={(value) => onChange('tenant', value)} confidence={confidence?.tenant.name.confidence} language={language} required />
-      <Field label={t.landlordName} value={form.landlord} placeholder={t.placeholders.landlord} error={errors.landlord} onChange={(value) => onChange('landlord', value)} confidence={confidence?.landlord.name.confidence} language={language} required />
-      <Field label={t.propertyName} value={form.property} placeholder={t.placeholders.property} error={errors.property} onChange={(value) => onChange('property', value)} confidence={confidence?.property.propertyName.confidence} language={language} required />
-      <Field label={t.unitNo} value={form.unitNo} placeholder={t.placeholders.unitNo} error={errors.unitNo} onChange={(value) => onChange('unitNo', value)} confidence={confidence?.property.unitNo.confidence} language={language} />
-      <Field label={t.propertyAddress} value={form.propertyAddress} placeholder={t.placeholders.address} error={errors.propertyAddress} onChange={(value) => onChange('propertyAddress', value)} confidence={confidence?.property.fullAddress.confidence} language={language} wide />
-      <Field label={t.propertyType} value={form.propertyType} error={errors.propertyType} onChange={(value) => onChange('propertyType', value)} confidence={confidence?.property.propertyType.confidence} language={language} />
-      <NumberField label={t.monthlyRental} value={form.monthlyRental} error={errors.monthlyRental} onChange={(value) => onChange('monthlyRental', value)} confidence={confidence?.financial.monthlyRental.confidence} language={language} />
-      <NumberField label={t.securityDeposit} value={form.securityDeposit} error={errors.securityDeposit} onChange={(value) => onChange('securityDeposit', value)} confidence={confidence?.financial.securityDeposit.confidence} language={language} />
-      <NumberField label={t.utilityDeposit} value={form.utilityDeposit} error={errors.utilityDeposit} onChange={(value) => onChange('utilityDeposit', value)} confidence={confidence?.financial.utilityDeposit.confidence} language={language} />
-      <NumberField label={t.accessCardDeposit} value={form.accessCardDeposit} error={errors.accessCardDeposit} onChange={(value) => onChange('accessCardDeposit', value)} confidence={confidence?.financial.accessCardDeposit.confidence} language={language} />
-      <NumberField label={t.carParkRemoteDeposit} value={form.carParkRemoteDeposit} error={errors.carParkRemoteDeposit} onChange={(value) => onChange('carParkRemoteDeposit', value)} confidence={confidence?.financial.carParkRemoteDeposit.confidence} language={language} />
-      <Field label={t.commencementDate} value={form.commencementDate} placeholder={t.placeholders.date} error={errors.commencementDate} onChange={(value) => onChange('commencementDate', value)} confidence={confidence?.dates.commencementDate.confidence} language={language} required />
-      <Field label={t.expiryDate} value={form.expiryDate} placeholder={t.placeholders.date} error={errors.expiryDate} onChange={(value) => onChange('expiryDate', value)} confidence={confidence?.dates.expiryDate.confidence} language={language} required />
-      <Field label={t.renewalReminder} value={form.renewalReminder} placeholder={t.placeholders.date} error={errors.renewalReminder} onChange={(value) => onChange('renewalReminder', value)} confidence={confidence?.dates.renewalReminder.confidence} language={language} />
-      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidence?.dates.renewalOption.confidence} language={language} />
-      <Field label={t.noticePeriod} value={form.noticePeriod} error={errors.noticePeriod} onChange={(value) => onChange('noticePeriod', value)} confidence={confidence?.dates.noticePeriod.confidence} language={language} />
-      <Field label={t.tenantIdNo} value={form.tenantIdNo} error={errors.tenantIdNo} onChange={(value) => onChange('tenantIdNo', value)} confidence={confidence?.tenant.idNo.confidence} language={language} />
-      <Field label={t.tenantPhone} value={form.tenantPhone} error={errors.tenantPhone} onChange={(value) => onChange('tenantPhone', value)} confidence={confidence?.tenant.phone.confidence} language={language} />
-      <Field label={t.tenantEmail} value={form.tenantEmail} error={errors.tenantEmail} onChange={(value) => onChange('tenantEmail', value)} confidence={confidence?.tenant.email.confidence} language={language} />
-      <Field label={t.landlordIdNo} value={form.landlordIdNo} error={errors.landlordIdNo} onChange={(value) => onChange('landlordIdNo', value)} confidence={confidence?.landlord.idNo.confidence} language={language} />
-      <Field label={t.landlordPhone} value={form.landlordPhone} error={errors.landlordPhone} onChange={(value) => onChange('landlordPhone', value)} confidence={confidence?.landlord.phone.confidence} language={language} />
-      <Field label={t.landlordEmail} value={form.landlordEmail} error={errors.landlordEmail} onChange={(value) => onChange('landlordEmail', value)} confidence={confidence?.landlord.email.confidence} language={language} />
+      <Field label={t.tenantName} value={form.tenantName} placeholder={t.placeholders.tenant} error={errors.tenantName} onChange={(value) => onChange('tenantName', value)} confidence={confidenceFor(fieldConfidence, 'tenant.name')} language={language} required />
+      <Field label={t.landlordName} value={form.landlordName} placeholder={t.placeholders.landlord} error={errors.landlordName} onChange={(value) => onChange('landlordName', value)} confidence={confidenceFor(fieldConfidence, 'landlord.name')} language={language} required />
+      <Field label={t.propertyName} value={form.propertyName} placeholder={t.placeholders.property} error={errors.propertyName} onChange={(value) => onChange('propertyName', value)} confidence={confidenceFor(fieldConfidence, 'property.name')} language={language} required />
+      <Field label={t.unitNo} value={form.unitNumber} placeholder={t.placeholders.unitNo} error={errors.unitNumber} onChange={(value) => onChange('unitNumber', value)} confidence={confidenceFor(fieldConfidence, 'property.unit')} language={language} />
+      <Field label={t.propertyAddress} value={form.fullAddress} placeholder={t.placeholders.address} error={errors.fullAddress} onChange={(value) => onChange('fullAddress', value)} confidence={confidenceFor(fieldConfidence, 'property.address')} language={language} wide />
+      <Field label={t.propertyType} value={form.propertyType} error={errors.propertyType} onChange={(value) => onChange('propertyType', value)} confidence={confidenceFor(fieldConfidence, 'property.type')} language={language} />
+      <NumberField label={t.monthlyRental} value={form.monthlyRental} error={errors.monthlyRental} onChange={(value) => onChange('monthlyRental', value)} confidence={confidenceFor(fieldConfidence, 'financial.monthly_rental')} language={language} />
+      <NumberField label={t.securityDeposit} value={form.securityDeposit} error={errors.securityDeposit} onChange={(value) => onChange('securityDeposit', value)} confidence={confidenceFor(fieldConfidence, 'financial.security_deposit')} language={language} />
+      <NumberField label={t.utilityDeposit} value={form.generalUtilityDeposit} error={errors.generalUtilityDeposit} onChange={(value) => onChange('generalUtilityDeposit', value)} confidence={confidenceFor(fieldConfidence, 'financial.utility_deposit')} language={language} />
+      <NumberField label={t.accessCardDeposit} value={form.accessCardDeposit} error={errors.accessCardDeposit} onChange={(value) => onChange('accessCardDeposit', value)} confidence={confidenceFor(fieldConfidence, 'financial.access_card_deposit')} language={language} />
+      <NumberField label={t.carParkRemoteDeposit} value={form.carParkRemoteDeposit} error={errors.carParkRemoteDeposit} onChange={(value) => onChange('carParkRemoteDeposit', value)} confidence={confidenceFor(fieldConfidence, 'financial.car_park_deposit')} language={language} />
+      <Field type="date" label={t.commencementDate} value={form.commencementDate} error={errors.commencementDate} onChange={(value) => onChange('commencementDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.commencement_date')} language={language} required />
+      <Field type="date" label={t.expiryDate} value={form.expiryDate} error={errors.expiryDate} onChange={(value) => onChange('expiryDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.expiry_date')} language={language} required />
+      <Field type="date" label={t.renewalReminder} value={form.renewalReminder} error={errors.renewalReminder} onChange={(value) => onChange('renewalReminder', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
+      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
+      <Field label={t.noticePeriod} value={form.noticePeriod} error={errors.noticePeriod} onChange={(value) => onChange('noticePeriod', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.notice_period')} language={language} />
+      <Field label={t.tenantIdNo} value={form.tenantIdentification} error={errors.tenantIdentification} onChange={(value) => onChange('tenantIdentification', value)} confidence={confidenceFor(fieldConfidence, 'tenant.ic_passport')} language={language} />
+      <Field label={t.tenantPhone} value={form.tenantPhone} error={errors.tenantPhone} onChange={(value) => onChange('tenantPhone', value)} confidence={confidenceFor(fieldConfidence, 'tenant.phone')} language={language} />
+      <Field label={t.tenantEmail} value={form.tenantEmail} error={errors.tenantEmail} onChange={(value) => onChange('tenantEmail', value)} confidence={confidenceFor(fieldConfidence, 'tenant.email')} language={language} />
+      <Field label={t.landlordIdNo} value={form.landlordIdentification} error={errors.landlordIdentification} onChange={(value) => onChange('landlordIdentification', value)} confidence={confidenceFor(fieldConfidence, 'landlord.ic_passport')} language={language} />
+      <Field label={t.landlordPhone} value={form.landlordPhone} error={errors.landlordPhone} onChange={(value) => onChange('landlordPhone', value)} confidence={confidenceFor(fieldConfidence, 'landlord.phone')} language={language} />
+      <Field label={t.landlordEmail} value={form.landlordEmail} error={errors.landlordEmail} onChange={(value) => onChange('landlordEmail', value)} confidence={confidenceFor(fieldConfidence, 'landlord.email')} language={language} />
       <Field label={t.signedTa} value={form.signedTa} error={errors.signedTa} onChange={(value) => onChange('signedTa', value)} wide />
       <TextArea label={t.renewalHistory} value={form.renewalHistory} error={errors.renewalHistory} onChange={(value) => onChange('renewalHistory', value)} />
       <TextArea label={t.specialClauses} value={form.specialClauses} error={errors.specialClauses} onChange={(value) => onChange('specialClauses', value)} />
       <TextArea label={t.notes} value={form.notes} placeholder={t.placeholders.notes} error={errors.notes} onChange={(value) => onChange('notes', value)} wide />
     </div>
   );
+}
+
+function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: TenancyMappedForm; extraction: TenancyExtraction; fallback: string }) {
+  const evidence = Object.entries(mapped.sourceReferences).flatMap(([path, source]) => {
+    if (!source || typeof source !== 'object') return [];
+    const item = source as { source_page?: number | null; source_excerpt?: string; confidence?: number };
+    const excerpt = String(item.source_excerpt ?? '').trim();
+    if (!excerpt) return [];
+    return [{ path, page: item.source_page, excerpt, confidence: item.confidence }];
+  });
+  return (
+    <div className="memory-stack">
+      <MemoryItem label="AI provider" value={extraction.provider} fallback={fallback} />
+      <MemoryItem label="Model" value={extraction.document.model ?? ''} fallback={fallback} />
+      <MemoryItem label="Overall confidence" value={`${Math.round(mapped.confidence * 100)}%`} fallback={fallback} />
+      <MemoryItem label="AI summary" value={mapped.summary} fallback={fallback} />
+      <MemoryItem label="Risks" value={mapped.risks.map(renderReviewRisk).filter(Boolean).join('\n')} fallback={fallback} />
+      <MemoryItem label="Warnings" value={mapped.warnings.join('\n')} fallback={fallback} />
+      <MemoryItem label="Low-confidence fields" value={mapped.lowConfidenceFields.join(', ')} fallback={fallback} />
+      <details className="raw-text">
+        <summary>Source references</summary>
+        {evidence.length ? evidence.map((item) => (
+          <p key={item.path}>
+            <strong>{item.path}</strong>{item.confidence === undefined ? '' : ` (${item.confidence}%)`}
+            {item.page ? ` - page ${item.page}` : ''}: {item.excerpt}
+          </p>
+        )) : <p>{fallback}</p>}
+      </details>
+    </div>
+  );
+}
+
+function confidenceFor(fieldConfidence: Record<string, number> | undefined, path: string): Confidence | undefined {
+  const value = fieldConfidence?.[path];
+  if (value === undefined) return undefined;
+  return value >= 80 ? 'high' : value >= 50 ? 'medium' : 'low';
+}
+
+function renderReviewRisk(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const risk = input as { severity?: string; reason?: string; recommendation?: string };
+  const reason = String(risk.reason ?? '').trim();
+  if (!reason) return '';
+  const severity = String(risk.severity ?? '').trim().toUpperCase();
+  const recommendation = String(risk.recommendation ?? '').trim();
+  return `${severity ? `[${severity}] ` : ''}${reason}${recommendation ? ` Recommendation: ${recommendation}` : ''}`;
 }
 
 function Field({
@@ -1280,8 +1399,8 @@ function NumberField({
   language
 }: {
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  value: MappedMoney;
+  onChange: (value: MappedMoney) => void;
   error?: string;
   confidence?: Confidence;
   language: Language;
@@ -1290,7 +1409,7 @@ function NumberField({
   return (
     <label className="field">
       <span>{label}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      <input type="number" min="0" placeholder={t.placeholders.amount} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="number" min="0" placeholder={t.placeholders.amount} value={value} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} />
       {error && <em>{error}</em>}
     </label>
   );
