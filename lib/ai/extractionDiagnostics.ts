@@ -30,6 +30,10 @@ type DiagnosticDetails = {
   provider?: 'openai' | 'deterministic';
   fallbackReason?: string | null;
   persisted?: boolean;
+  workspaceId?: string;
+  role?: string;
+  postgrestCode?: string;
+  rpcName?: string;
 };
 
 export function logExtractionDiagnostic(event: string, details: DiagnosticDetails = {}): void {

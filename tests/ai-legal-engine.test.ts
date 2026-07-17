@@ -235,10 +235,10 @@ test('Sprint 011 preserves source references, corrections, duplicate hashes and 
   assert.match(migration, /sprint_011_import_tenancy_legal_intelligence/i);
   assert.match(migration, /set document_hash = imported_document_hash/i);
   assert.match(migration, /security invoker/i);
-  assert.match(confirmRoute, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
+  assert.match(confirmRoute, /upload_end_to_end_import_tenancy/);
   assert.match(uploadRoute, /documentHash = createHash\('sha256'\)/);
   assert.match(uploadRoute, /rollbackStatus: 'document-preserved'/);
-  assert.match(uploadRoute, /sprint_005_create_document_bundle/);
+  assert.match(uploadRoute, /upload_end_to_end_preserve_failed_upload/);
   assert.match(commandCentre, /userCorrections: reviewCorrections/);
 });
 
@@ -254,7 +254,7 @@ test('Sprint 009 persistence is atomic, workspace-scoped, and writes every requi
   }
   assert.match(migration, /revoke all on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) from public, anon/i);
   assert.match(migration, /grant execute on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) to authenticated/i);
-  assert.match(route, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
+  assert.match(route, /upload_end_to_end_import_tenancy/);
   assert.match(readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8'), /public\.sprint_009_import_tenancy_legal_intelligence\(p_workspace_id, p_payload\)/);
   assert.doesNotMatch(route, /service[_-]?role/i);
 });

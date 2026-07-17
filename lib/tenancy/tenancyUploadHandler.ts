@@ -137,8 +137,14 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         return normalizeGuardResponse(auth, 'auth');
       }
       ({ supabase } = auth);
-      const { workspaceId } = auth;
-      logExtractionDiagnostic('authentication_completed', { requestId, stage, authenticated: true });
+      const { workspaceId, role } = auth;
+      logExtractionDiagnostic('authentication_completed', {
+        requestId,
+        stage,
+        authenticated: true,
+        workspaceId,
+        role
+      });
 
       stage = 'upload';
       let formData: FormData;
@@ -227,10 +233,9 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         });
         const sanitizedFilename = storagePath.split('/').pop() ?? 'tenancy-agreement';
         stage = 'database';
-        const bundle = await supabase.rpc('sprint_005_create_document_bundle', {
+        const bundle = await supabase.rpc('upload_end_to_end_preserve_failed_upload', {
           p_workspace_id: workspaceId,
           p_payload: {
-            tenancyId: null,
             originalFilename: file.name,
             sanitizedFilename,
             storageBucket,
