@@ -18,7 +18,7 @@ export class OpenAiOcrProvider implements OcrProvider {
       : { type: 'input_file' as const, filename: input.filename, file_data: `data:${input.mimeType};base64,${encoded}` };
     try {
       logOpenAiDiagnostic('ocr_started', { ocrModel: this.model, openAiKeyPresent: true });
-      const client = createOpenAiClient({ apiKey: this.apiKey, fetcher: this.fetcher, timeoutMs: 180_000, maxRetries: 2 });
+      const client = createOpenAiClient({ apiKey: this.apiKey, fetcher: this.fetcher, timeoutMs: 90_000, maxRetries: 0 });
       const response = await client.responses.create({
         model: this.model,
         input: [{

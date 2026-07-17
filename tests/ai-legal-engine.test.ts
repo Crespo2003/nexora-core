@@ -38,7 +38,7 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'clauses', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);
 });
@@ -229,7 +229,7 @@ test('Sprint 010 stores structured risks and field confidence without replacing 
 test('Sprint 011 preserves source references, corrections, duplicate hashes and failed uploads', () => {
   const migration = readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8');
   const confirmRoute = readFileSync('app/api/tenancy-import/confirm/route.ts', 'utf8');
-  const uploadRoute = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
+  const uploadRoute = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
   const commandCentre = readFileSync('app/rental-command-centre.tsx', 'utf8');
   assert.match(migration, /source_references jsonb not null default '\{\}'::jsonb/i);
   assert.match(migration, /user_corrections jsonb not null default '\{\}'::jsonb/i);

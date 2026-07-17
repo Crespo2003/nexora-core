@@ -2,9 +2,20 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 const publicRoutes = ['/login', '/signup', '/forgot-password', '/reset-password', '/auth/callback', '/access-denied', '/invitations/accept'];
+const tenancyUploadPath = '/api/tenancy-import/upload';
 
 function isPublicPath(pathname: string) {
   return publicRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+}
+
+function apiError(pathname: string, status: 401 | 403, code: string) {
+  const payload = pathname === tenancyUploadPath
+    ? { success: false, stage: 'auth', code, error: code, requestId: crypto.randomUUID() }
+    : { success: false, error: code };
+  return NextResponse.json(payload, {
+    status,
+    headers: { 'Cache-Control': 'private, no-store, max-age=0' }
+  });
 }
 
 export async function middleware(request: NextRequest) {
@@ -20,16 +31,13 @@ export async function middleware(request: NextRequest) {
     const fetchSite = request.headers.get('sec-fetch-site');
     const origin = request.headers.get('origin');
     if (fetchSite === 'cross-site' || (origin && fetchSite !== 'same-origin' && origin !== request.nextUrl.origin)) {
-      return NextResponse.json(
-        { success: false, error: 'cross-site-request-blocked' },
-        { status: 403, headers: { 'Cache-Control': 'private, no-store, max-age=0' } }
-      );
+      return apiError(pathname, 403, 'cross-site-request-blocked');
     }
   }
 
   if (!url || !key) {
     if (isApi && !isSetupApi) {
-      return NextResponse.json({ success: false, error: 'database-unavailable' }, { status: 401 });
+      return apiError(pathname, 401, 'database-unavailable');
     }
     if (!isApi && !isPublicPath(pathname)) {
       const redirect = request.nextUrl.clone();
@@ -55,9 +63,7 @@ export async function middleware(request: NextRequest) {
   });
 
   const { data } = await supabase.auth.getUser();
-  if (!data.user && isApi && !isSetupApi) {
-    return NextResponse.json({ success: false, error: 'authentication-required' }, { status: 401 });
-  }
+  if (!data.user && isApi && !isSetupApi) return apiError(pathname, 401, 'authentication-required');
 
   if (!data.user && !isApi && !isPublicPath(pathname)) {
     const redirect = request.nextUrl.clone();

@@ -3,6 +3,7 @@ import { extractDocumentText } from '../documents/extractText';
 import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
+import { logExtractionDiagnostic } from './extractionDiagnostics';
 
 export type LegalParty = {
   name: string;
@@ -112,6 +113,9 @@ type ExtractTenancyOptions = {
   fetcher?: typeof fetch;
   ocrProvider?: OcrProvider;
   maxChunkCharacters?: number;
+  maxOutputTokens?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
 };
 
 const stringSchema = { type: 'string' } as const;
@@ -152,28 +156,6 @@ const legalRiskSchema = {
     source_excerpt: stringSchema
   }
 } as const;
-const legalClauseSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['id', 'category', 'title', 'summary', 'full_text', 'source_page', 'source_excerpt', 'confidence', 'risk_level', 'responsible_party', 'obligation', 'trigger', 'deadline', 'financial_impact', 'recommendation'],
-  properties: {
-    id: stringSchema,
-    category: { type: 'string', enum: ['Rental payment', 'Late payment', 'Security deposit', 'Utility deposit', 'Access card deposit', 'Car park deposit', 'Renewal', 'Notice period', 'Termination', 'Early termination', 'Default', 'Viewing rights', 'Entry and inspection', 'Repairs', 'Structural maintenance', 'General maintenance', 'Utilities', 'Insurance', 'Stamp duty', 'Inventory', 'Illegal use', 'Subletting', 'Assignment', 'Sale during tenancy', 'Force majeure / Act of God', 'Indemnity', 'Forfeiture', 'Governing law', 'Dispute resolution', 'Handover', 'Reinstatement', 'Renovation', 'Business-use restriction', 'Witnessing', 'Special conditions'] },
-    title: stringSchema,
-    summary: stringSchema,
-    full_text: stringSchema,
-    source_page: { type: ['integer', 'null'], minimum: 1 },
-    source_excerpt: stringSchema,
-    confidence: { type: 'number', minimum: 0, maximum: 100 },
-    risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
-    responsible_party: { type: 'string', enum: ['tenant', 'landlord', 'both', 'unclear'] },
-    obligation: stringSchema,
-    trigger: stringSchema,
-    deadline: stringSchema,
-    financial_impact: stringSchema,
-    recommendation: stringSchema
-  }
-} as const;
 const fieldEvidenceItemSchema = {
   type: 'object',
   additionalProperties: false,
@@ -191,7 +173,7 @@ export const tenancyLegalIntelligenceSchema = {
   additionalProperties: false,
   required: [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'clauses', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
+    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ],
   properties: {
     document_type: stringSchema,
@@ -241,7 +223,6 @@ export const tenancyLegalIntelligenceSchema = {
         insurance: stringSchema, maintenance: stringSchema, access_card: stringSchema, car_park: stringSchema
       }
     },
-    clauses: { type: 'array', items: legalClauseSchema },
     special_clauses: { type: 'array', items: stringSchema },
     risks: { type: 'array', items: legalRiskSchema },
     warnings: { type: 'array', items: stringSchema },
@@ -271,7 +252,6 @@ Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is abse
 Use empty strings, zero, and empty arrays for facts that are not stated.
 Preserve material special clauses as concise complete statements.
 Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
-Extract every supported legal clause across every supplied page. Preserve a source page and short verbatim source excerpt for every clause, and never infer a clause without document support. Use the canonical clause categories from the response schema. Identify the responsible party, obligation, trigger, deadline, financial impact, risk level, and a practical recommendation while keeping the source wording intact.
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
 Populate field_confidence with a 0-100 percentage for every extracted scalar and array field using its dot path, for example tenant.name, financial.monthly_rental, legal.witnesses and special_clauses. Use 0 for absent fields.
@@ -332,6 +312,9 @@ export async function extractTenancyText(
       apiKey,
       model,
       fetcher: options.fetcher,
+      maxOutputTokens: options.maxOutputTokens,
+      timeoutMs: options.timeoutMs,
+      maxAttempts: options.maxAttempts,
       prompt: `Document: ${filename}\nSection ${index + 1} of ${chunks.length}. Extract every relevant fact from this section.\n\n${chunks[index]}`
     }));
   }
@@ -342,6 +325,9 @@ export async function extractTenancyText(
       apiKey,
       model,
       fetcher: options.fetcher,
+      maxOutputTokens: options.maxOutputTokens,
+      timeoutMs: options.timeoutMs,
+      maxAttempts: options.maxAttempts,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
   const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
@@ -440,8 +426,29 @@ export function applyRiskEngine(
   if (extraction.confidence < 0.75) warnings.push('Overall extraction confidence is below 75%; verify against the source document.');
 
   const completed = { ...extraction, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
-  const legalIntelligence = buildLegalIntelligence(completed, rawText);
-  return { ...completed, clauses: legalIntelligence.clauses, legal_intelligence: legalIntelligence };
+  return attachLegalIntelligence(completed, rawText);
+}
+
+export function attachLegalIntelligence(
+  extraction: TenancyLegalIntelligence,
+  rawText: string,
+  build: typeof buildLegalIntelligence = buildLegalIntelligence
+): TenancyLegalIntelligence {
+  try {
+    const legalIntelligence = build(extraction, rawText);
+    return { ...extraction, clauses: legalIntelligence.clauses, legal_intelligence: legalIntelligence };
+  } catch (error) {
+    logExtractionDiagnostic('legal_analysis_failed', {
+      stage: 'mapping',
+      errorName: error instanceof Error ? error.name : 'unknown',
+      errorCode: 'legal-analysis-failed'
+    });
+    return {
+      ...extraction,
+      clauses: [],
+      warnings: uniqueStrings([...extraction.warnings, 'Legal analysis was unavailable; the base tenancy extraction is ready for review.'])
+    };
+  }
 }
 
 export function createTenancySummary(extraction: TenancyLegalIntelligence): string {
@@ -465,6 +472,9 @@ async function requestStructuredExtraction(input: {
   model: string;
   prompt: string;
   fetcher?: typeof fetch;
+  maxOutputTokens?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
 }): Promise<TenancyLegalIntelligence> {
   try {
     return await requestStructuredOpenAi({
@@ -475,8 +485,9 @@ async function requestStructuredExtraction(input: {
       schema: tenancyLegalIntelligenceSchema,
       system: extractionInstructions,
       prompt: input.prompt,
-      maxOutputTokens: 12_000,
-      maxAttempts: 3,
+      maxOutputTokens: input.maxOutputTokens ?? 12_000,
+      timeoutMs: input.timeoutMs,
+      maxAttempts: input.maxAttempts,
       validate: validateExtractionShape
     });
   } catch (error) {

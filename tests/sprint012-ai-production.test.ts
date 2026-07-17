@@ -103,7 +103,7 @@ test('missing API key is the only unconfigured fallback condition', async () => 
 });
 
 test('production route contract, file paths, UI provider state, isolation and retry safety are enforced', () => {
-  const route = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
+  const route = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
   const configRoute = readFileSync('app/api/tenancy-import/config-status/route.ts', 'utf8');
   const textExtraction = readFileSync('lib/documents/extractText.ts', 'utf8');
   const ui = readFileSync('app/rental-command-centre.tsx', 'utf8');

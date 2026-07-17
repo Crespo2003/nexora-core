@@ -25,18 +25,20 @@ test('tenancy import clients surface a stable error for malformed JSON', async (
 });
 
 test('all tenancy import endpoint exits return NextResponse JSON payloads', () => {
-  const upload = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
+  const upload = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
+  const uploadRoute = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
   const config = readFileSync('app/api/tenancy-import/config-status/route.ts', 'utf8');
   const confirm = readFileSync('app/api/tenancy-import/confirm/route.ts', 'utf8');
   for (const source of [upload, config, confirm]) {
-    assert.doesNotMatch(source, /Response\.text\(|new Response\(|return\s+auth;|return\s+requestSizeError;/);
+    assert.doesNotMatch(source, /new Response\(|return\s+auth;|return\s+requestSizeError;/);
     assert.match(source, /NextResponse\.json\(/);
   }
-  assert.match(upload, /function uploadError\(/);
-  assert.match(upload, /return asNextJsonResponse\(requestSizeError\)/);
-  assert.match(upload, /return asNextJsonResponse\(auth\)/);
+  assert.match(upload, /createTenancyUploadHandler/);
+  assert.match(upload, /normalizeGuardResponse\(requestSizeError, 'validation'\)/);
+  assert.match(upload, /normalizeGuardResponse\(auth, 'auth'\)/);
   assert.match(confirm, /await auth\.clone\(\)\.json\(\)/);
   assert.match(config, /await auth\.clone\(\)\.json\(\)/);
+  assert.match(uploadRoute, /export const runtime = 'nodejs'/);
 });
 
 test('the tenancy import UI never invokes Response.json directly for upload or confirmation', () => {

@@ -158,7 +158,7 @@ test('23. confines legal intelligence records and routes to the active workspace
 
 test('24. keeps legal analysis server-side and avoids duplicate OpenAI extraction calls during comparison', () => {
   const compareRoute = readFileSync('app/api/tenancy-legal-intelligence/compare/route.ts', 'utf8');
-  const uploadRoute = readFileSync('app/api/tenancy-import/upload/route.ts', 'utf8');
+  const uploadRoute = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
   assert.doesNotMatch(compareRoute, /OPENAI_API_KEY|requestStructuredOpenAi|extractTenancyFile/);
   assert.match(compareRoute, /document_extractions/);
   assert.match(uploadRoute, /document_hash/);
