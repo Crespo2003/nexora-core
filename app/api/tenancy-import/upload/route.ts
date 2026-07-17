@@ -11,6 +11,37 @@ const storageBucket = 'real-estate-documents';
 
 export const maxDuration = 300;
 
+type ErrorExtras = Record<string, unknown>;
+
+function uploadError(error: string, stage: string, status: number, extras: ErrorExtras = {}) {
+  return NextResponse.json({ success: false, error, stage, ...extras }, { status });
+}
+
+async function asNextJsonResponse(response: Response) {
+  try {
+    const payload: unknown = await response.clone().json();
+    return NextResponse.json(
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? payload
+        : { success: false, error: 'request-rejected' },
+      { status: response.status }
+    );
+  } catch {
+    return uploadError('request-rejected', 'authorization', response.status || 500);
+  }
+}
+
+function safeErrorDetails(error: unknown) {
+  const details = error && typeof error === 'object' ? error as { code?: unknown; status?: unknown; requestId?: unknown } : {};
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown-error';
+  return {
+    code: typeof details.code === 'string' ? details.code : undefined,
+    status: typeof details.status === 'number' ? details.status : undefined,
+    requestId: typeof details.requestId === 'string' ? details.requestId : undefined,
+    message: message.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 500)
+  };
+}
+
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
   const base = filename.replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -24,9 +55,9 @@ export async function POST(request: Request) {
 
   try {
     const requestSizeError = rejectOversizedRequest(request, maxUploadBytes + 1024 * 1024);
-    if (requestSizeError) return requestSizeError;
+    if (requestSizeError) return asNextJsonResponse(requestSizeError);
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
-    if (auth instanceof Response) return auth;
+    if (auth instanceof Response) return asNextJsonResponse(auth);
     ({ supabase } = auth);
     const { workspaceId } = auth;
 
@@ -34,11 +65,11 @@ export async function POST(request: Request) {
     const file = formData.get('file');
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ error: 'No file uploaded.', stage: 'upload' }, { status: 400 });
+      return uploadError('No file uploaded.', 'upload', 400);
     }
 
     if (file.size > maxUploadBytes) {
-      return NextResponse.json({ error: 'File is too large.', stage: 'upload' }, { status: 400 });
+      return uploadError('File is too large.', 'upload', 400);
     }
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -48,7 +79,7 @@ export async function POST(request: Request) {
     const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
 
     if (!isPdf && !isDocx && !isTxt) {
-      return NextResponse.json({ error: 'Unsupported file type.', stage: 'upload' }, { status: 400 });
+      return uploadError('Unsupported file type.', 'upload', 400);
     }
     const config = getOpenAiConfiguration();
     const fileType = isPdf ? 'pdf' : isDocx ? 'docx' : 'txt';
@@ -70,16 +101,16 @@ export async function POST(request: Request) {
         ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         : 'text/plain';
     if (!validateFileSignature(buffer, mimeType)) {
-      return NextResponse.json({ error: 'File content does not match its type.', stage: 'upload' }, { status: 400 });
+      return uploadError('File content does not match its type.', 'upload', 400);
     }
     const duplicate = await supabase.from('documents').select('id, processing_status')
       .eq('workspace_id', workspaceId).eq('document_hash', documentHash).maybeSingle();
     if (duplicate.error) throw duplicate.error;
     if (duplicate.data) {
-      return NextResponse.json({
-        error: 'duplicate-document', stage: 'duplicate-check', documentId: duplicate.data.id,
+      return uploadError('duplicate-document', 'duplicate-check', 409, {
+        documentId: duplicate.data.id,
         retryAllowed: ['ocr_required', 'extraction_failed'].includes(String(duplicate.data.processing_status))
-      }, { status: 409 });
+      });
     }
 
     const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, {
@@ -124,15 +155,15 @@ export async function POST(request: Request) {
       const saved = bundle.data as { document: { id: string }; extraction: { id: string } };
       logExtractionFailure('extraction_failed', technicalReference);
       logExtractionDiagnostic('document_persistence', { persisted: true, fallbackReason: technicalReference });
-      return NextResponse.json({
-        error: 'document-extraction-failed', stage: 'extraction', documentId: saved.document.id,
+      return uploadError('document-extraction-failed', 'extraction', 422, {
+        documentId: saved.document.id,
         extractionId: saved.extraction.id, retryAllowed: true, rollbackStatus: 'document-preserved',
         message: {
           en: 'The document was saved, but extraction failed. Retry it from Document Centre.',
           zh: '文件已保存，但提取失败。请从文件中心重试。'
         },
         technicalReference
-      }, { status: 422 });
+      });
     }
 
     logExtractionDiagnostic('extraction_completed', {
@@ -171,6 +202,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     logExtractionFailure('route_failed', 'upload_or_persistence_failed');
+    console.error('[tenancy-extraction] upload_route_failed', safeErrorDetails(error));
 
     if (uploadedPath) {
       try {
@@ -180,6 +212,6 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ error: getApiErrorMessage(error), stage: 'upload' }, { status: 500 });
+    return uploadError(getApiErrorMessage(error), 'upload', 500);
   }
 }

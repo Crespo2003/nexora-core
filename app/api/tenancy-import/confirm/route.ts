@@ -31,12 +31,15 @@ export async function POST(request: Request) {
     };
 
     const auth = await requireWorkspaceAccess(['owner', 'admin', 'manager', 'agent'], request);
-    if (auth instanceof Response) return auth;
+    if (auth instanceof Response) {
+      const payload: unknown = await auth.clone().json().catch(() => ({ success: false, error: 'authorization-failed' }));
+      return NextResponse.json(payload, { status: auth.status });
+    }
     const { supabase, workspaceId } = auth;
     if (clientWorkspaceId && clientWorkspaceId !== workspaceId) {
-      return NextResponse.json({ error: 'workspace-mismatch', stage: 'authorization' }, { status: 403 });
+      return NextResponse.json({ success: false, error: 'workspace-mismatch', stage: 'authorization' }, { status: 403 });
     }
-    const imported = await supabase.rpc('sprint_011_import_tenancy_legal_intelligence', {
+    const imported = await supabase.rpc('sprint_015_import_tenancy_legal_intelligence', {
       p_workspace_id: workspaceId,
       p_payload: { tenancy, collection, document, extraction }
     });
@@ -50,6 +53,7 @@ export async function POST(request: Request) {
     };
 
     return NextResponse.json({
+      success: true,
       tenancy: result.tenancy,
       document: result.document,
       extraction: result.extraction,
@@ -57,10 +61,10 @@ export async function POST(request: Request) {
       payment: result.payment
     });
   } catch (error) {
-    console.error('Confirm tenancy import failed');
+    console.error('[tenancy-extraction] confirm_import_failed', { error: error instanceof Error ? error.message.slice(0, 500) : 'unknown-error' });
     const duplicate = typeof error === 'object' && error && 'code' in error && String(error.code) === '23505';
     return NextResponse.json(
-      { error: duplicate ? 'duplicate-tenancy' : getApiErrorMessage(error), stage: duplicate ? 'duplicate-check' : 'atomic-import' },
+      { success: false, error: duplicate ? 'duplicate-tenancy' : getApiErrorMessage(error), stage: duplicate ? 'duplicate-check' : 'atomic-import' },
       { status: duplicate ? 409 : 500 }
     );
   }

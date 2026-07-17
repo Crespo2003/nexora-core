@@ -38,7 +38,7 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
+    'tenancy', 'utilities', 'legal', 'clauses', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);
 });
@@ -236,7 +236,7 @@ test('Sprint 011 preserves source references, corrections, duplicate hashes and 
   assert.match(migration, /sprint_011_import_tenancy_legal_intelligence/i);
   assert.match(migration, /set document_hash = imported_document_hash/i);
   assert.match(migration, /security invoker/i);
-  assert.match(confirmRoute, /\.rpc\('sprint_011_import_tenancy_legal_intelligence'/);
+  assert.match(confirmRoute, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
   assert.match(uploadRoute, /documentHash = createHash\('sha256'\)/);
   assert.match(uploadRoute, /rollbackStatus: 'document-preserved'/);
   assert.match(uploadRoute, /sprint_005_create_document_bundle/);
@@ -255,7 +255,7 @@ test('Sprint 009 persistence is atomic, workspace-scoped, and writes every requi
   }
   assert.match(migration, /revoke all on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) from public, anon/i);
   assert.match(migration, /grant execute on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) to authenticated/i);
-  assert.match(route, /\.rpc\('sprint_011_import_tenancy_legal_intelligence'/);
+  assert.match(route, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
   assert.match(readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8'), /public\.sprint_009_import_tenancy_legal_intelligence\(p_workspace_id, p_payload\)/);
   assert.doesNotMatch(route, /service[_-]?role/i);
 });
@@ -270,7 +270,7 @@ function baseExtraction(overrides: Partial<TenancyLegalIntelligence> = {}): Tena
     tenancy: { commencement_date: '2026-01-01', expiry_date: '2027-01-01', renewal_option: 'One year', notice_period: 'Two months', payment_due_day: '1' },
     utilities: { tnb: '', water: '', iwk: '', wifi: '' },
     legal: { signatures: 'Signed', witnesses: 'Witness One', stamp_duty: 'RM100', inventory: 'Attached', restrictions: [], late_payment: '', termination: 'Two months notice', viewing_rights: 'Prior notice', insurance: '', maintenance: 'Tenant minor repairs', access_card: '', car_park: '' },
-    special_clauses: [], risks: [], warnings: [], field_confidence: {}, field_evidence: {}
+    clauses: [], special_clauses: [], risks: [], warnings: [], field_confidence: {}, field_evidence: {}
   };
   return {
     ...base,

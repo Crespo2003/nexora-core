@@ -1,6 +1,6 @@
 import { classifyOpenAiError, createOpenAiClient } from '../ai/openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from '../ai/openAiConfig';
-import { logOpenAiDiagnostic } from '../ai/extractionDiagnostics';
+import { logOpenAiDiagnostic, logOpenAiError } from '../ai/extractionDiagnostics';
 import type { OcrProvider, OcrResult } from './ocrProvider';
 import { FallbackOcrProvider } from './fallbackOcr';
 
@@ -35,6 +35,12 @@ export class OpenAiOcrProvider implements OcrProvider {
       return text ? { status: 'completed', text, error: '' } : { status: 'failed', text: '', error: 'ocr-malformed-or-empty-response' };
     } catch (error) {
       const classified = classifyOpenAiError(error);
+      logOpenAiError('ocr_error', error, {
+        ocrModel: this.model,
+        fallbackReason: classified.code,
+        statusCode: classified.status,
+        requestId: classified.requestId
+      });
       logOpenAiDiagnostic('ocr_failed', {
         ocrModel: this.model,
         fallbackReason: classified.code,

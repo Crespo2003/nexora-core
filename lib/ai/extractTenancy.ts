@@ -2,6 +2,7 @@ import type { OcrProvider } from '../ocr/ocrProvider';
 import { extractDocumentText } from '../documents/extractText';
 import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
+import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
 
 export type LegalParty = {
   name: string;
@@ -80,6 +81,8 @@ export type TenancyLegalIntelligence = {
     access_card: string;
     car_park: string;
   };
+  clauses?: LegalClause[];
+  legal_intelligence?: LegalIntelligenceResult;
   special_clauses: string[];
   risks: LegalRisk[];
   warnings: string[];
@@ -149,6 +152,28 @@ const legalRiskSchema = {
     source_excerpt: stringSchema
   }
 } as const;
+const legalClauseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'category', 'title', 'summary', 'full_text', 'source_page', 'source_excerpt', 'confidence', 'risk_level', 'responsible_party', 'obligation', 'trigger', 'deadline', 'financial_impact', 'recommendation'],
+  properties: {
+    id: stringSchema,
+    category: { type: 'string', enum: ['Rental payment', 'Late payment', 'Security deposit', 'Utility deposit', 'Access card deposit', 'Car park deposit', 'Renewal', 'Notice period', 'Termination', 'Early termination', 'Default', 'Viewing rights', 'Entry and inspection', 'Repairs', 'Structural maintenance', 'General maintenance', 'Utilities', 'Insurance', 'Stamp duty', 'Inventory', 'Illegal use', 'Subletting', 'Assignment', 'Sale during tenancy', 'Force majeure / Act of God', 'Indemnity', 'Forfeiture', 'Governing law', 'Dispute resolution', 'Handover', 'Reinstatement', 'Renovation', 'Business-use restriction', 'Witnessing', 'Special conditions'] },
+    title: stringSchema,
+    summary: stringSchema,
+    full_text: stringSchema,
+    source_page: { type: ['integer', 'null'], minimum: 1 },
+    source_excerpt: stringSchema,
+    confidence: { type: 'number', minimum: 0, maximum: 100 },
+    risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
+    responsible_party: { type: 'string', enum: ['tenant', 'landlord', 'both', 'unclear'] },
+    obligation: stringSchema,
+    trigger: stringSchema,
+    deadline: stringSchema,
+    financial_impact: stringSchema,
+    recommendation: stringSchema
+  }
+} as const;
 const fieldEvidenceItemSchema = {
   type: 'object',
   additionalProperties: false,
@@ -166,7 +191,7 @@ export const tenancyLegalIntelligenceSchema = {
   additionalProperties: false,
   required: [
     'document_type', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
+    'tenancy', 'utilities', 'legal', 'clauses', 'special_clauses', 'risks', 'warnings', 'field_confidence', 'field_evidence'
   ],
   properties: {
     document_type: stringSchema,
@@ -216,6 +241,7 @@ export const tenancyLegalIntelligenceSchema = {
         insurance: stringSchema, maintenance: stringSchema, access_card: stringSchema, car_park: stringSchema
       }
     },
+    clauses: { type: 'array', items: legalClauseSchema },
     special_clauses: { type: 'array', items: stringSchema },
     risks: { type: 'array', items: legalRiskSchema },
     warnings: { type: 'array', items: stringSchema },
@@ -245,6 +271,7 @@ Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is abse
 Use empty strings, zero, and empty arrays for facts that are not stated.
 Preserve material special clauses as concise complete statements.
 Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
+Extract every supported legal clause across every supplied page. Preserve a source page and short verbatim source excerpt for every clause, and never infer a clause without document support. Use the canonical clause categories from the response schema. Identify the responsible party, obligation, trigger, deadline, financial impact, risk level, and a practical recommendation while keeping the source wording intact.
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
 Populate field_confidence with a 0-100 percentage for every extracted scalar and array field using its dot path, for example tenant.name, financial.monthly_rental, legal.witnesses and special_clauses. Use 0 for absent fields.
@@ -412,7 +439,9 @@ export function applyRiskEngine(
   if (!extraction.tenancy.expiry_date) warnings.push('Expiry date was not reliably detected.');
   if (extraction.confidence < 0.75) warnings.push('Overall extraction confidence is below 75%; verify against the source document.');
 
-  return { ...extraction, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
+  const completed = { ...extraction, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
+  const legalIntelligence = buildLegalIntelligence(completed, rawText);
+  return { ...completed, clauses: legalIntelligence.clauses, legal_intelligence: legalIntelligence };
 }
 
 export function createTenancySummary(extraction: TenancyLegalIntelligence): string {
@@ -509,6 +538,8 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
       maintenance: text(source.legal?.maintenance), access_card: text(source.legal?.access_card),
       car_park: text(source.legal?.car_park)
     },
+    clauses: (Array.isArray(source.clauses) ? source.clauses : []).map((item) => normalizeClause(item)).filter((item): item is LegalClause => item !== null),
+    legal_intelligence: source.legal_intelligence ?? { version: 'sprint-015-v1', executive_summary: '', normalized_fields: {}, clauses: [], risks: [] },
     special_clauses: uniqueStrings(source.special_clauses ?? []).map(normalizePercentages),
     risks: uniqueRisks(source.risks ?? []),
     warnings: uniqueStrings(source.warnings ?? []),
