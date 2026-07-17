@@ -5,6 +5,7 @@ import { createTenancyUploadHandler } from '../lib/tenancy/tenancyUploadHandler'
 import { attachLegalIntelligence, type TenancyLegalIntelligence } from '../lib/ai/extractTenancy';
 import { JsonApiResponseError, readJsonApiResponse } from '../lib/http/jsonResponse';
 import { mapTenancyExtractionToForm } from '../lib/tenancy/mapTenancyExtractionToForm';
+import { maxTenancyUploadRequestBytes } from '../lib/tenancy/uploadLimits';
 
 const knownAgreementText = 'MALAYSIAN TENANCY AGREEMENT\nTenant: Test Tenant\nLandlord: Test Landlord\nMonthly rental: RM 3500\nSecurity deposit: RM 7000\nCommencement date: 2026-07-01\nExpiry date: 2028-06-30\nTermination: Two months notice.\nInspection: 24 hours notice.\nWitness: Test Witness.\nStamp duty: RM 350.';
 
@@ -22,8 +23,12 @@ test('unsupported files, oversized uploads, and auth failures always return the 
   const unsupported = await upload(new File(['binary'], 'agreement.exe', { type: 'application/octet-stream' }));
   await assertUploadFailure(unsupported, 400, 'validation', 'unsupported-file-type');
 
-  const oversized = await upload(new File([new Uint8Array((10 * 1024 * 1024) + 1)], 'agreement.txt', { type: 'text/plain' }));
-  await assertUploadFailure(oversized, 413, 'validation', 'file-too-large');
+  const oversized = await createHandler(async () => extractionFixture())(new Request('https://nexora.test/api/tenancy-import/upload', {
+    method: 'POST',
+    headers: { 'content-length': String(maxTenancyUploadRequestBytes + 1) },
+    body: new FormData()
+  }));
+  await assertUploadFailure(oversized, 413, 'validation', 'request-too-large');
 
   const handler = createTenancyUploadHandler({
     requireWorkspaceAccess: async () => Response.json({ success: false, error: 'authentication-required' }, { status: 401 })

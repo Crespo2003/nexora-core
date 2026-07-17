@@ -166,7 +166,7 @@ export const translations = {
       documentUnavailable: 'Document unavailable.',
       collectionDuplicate: 'This tenancy already has a collection record for that month.',
       unsupportedFile: 'Unsupported file type. Please upload a PDF or DOCX tenancy agreement.',
-      fileTooLarge: 'File is too large. Please upload a file under 10 MB.',
+      fileTooLarge: 'File is too large. Please upload a file up to 50 MB.',
       storageMissing: 'Supabase Storage bucket tenancy-documents is not available. Please create it before importing documents.',
       importNeedsSupabase: 'AI Tenancy Import requires Supabase so the document and imported records can be saved.'
     },
@@ -349,7 +349,7 @@ export const translations = {
       documentUnavailable: '文件无法使用。',
       collectionDuplicate: '此租约该月份已有收款记录。',
       unsupportedFile: '不支持此文件类型。请上传 PDF 或 DOCX 租约。',
-      fileTooLarge: '文件太大。请上传 10 MB 以下的文件。',
+      fileTooLarge: '文件太大。请上传不超过 50 MB 的文件。',
       storageMissing: 'Supabase Storage bucket tenancy-documents 不可用。导入文件前请先创建。',
       importNeedsSupabase: 'AI 租约导入需要 Supabase，以保存文件与导入记录。'
     },

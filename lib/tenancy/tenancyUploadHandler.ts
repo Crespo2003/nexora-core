@@ -5,8 +5,8 @@ import { getOpenAiConfiguration } from '../ai/openAiConfig';
 import { logExtractionDiagnostic, logExtractionFailure } from '../ai/extractionDiagnostics';
 import { validateFileSignature, workspaceStoragePath } from '../documents/upload';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../supabase/server';
+import { maxTenancyUploadBytes, maxTenancyUploadRequestBytes } from './uploadLimits';
 
-const maxUploadBytes = 10 * 1024 * 1024;
 const storageBucket = 'real-estate-documents';
 const reusableExtractionStatuses = ['extraction_completed', 'completed', 'ready'];
 const retryableDocumentStatuses = ['ocr_required', 'extraction_failed'];
@@ -104,6 +104,41 @@ function sanitizeStorageFilename(filename: string): string {
   return `${base || 'tenancy-agreement'}-${randomUUID()}.${extension}`;
 }
 
+type TenancyFileDescriptor = {
+  filename: string;
+  mimeType: string;
+  isPdf: boolean;
+  isDocx: boolean;
+  isTxt: boolean;
+};
+
+function tenancyFileDescriptor(filename: string, suppliedMimeType: string): TenancyFileDescriptor | null {
+  const lowerFilename = filename.toLowerCase();
+  const isPdf = suppliedMimeType === 'application/pdf' || lowerFilename.endsWith('.pdf');
+  const isDocx = suppliedMimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerFilename.endsWith('.docx');
+  const isTxt = suppliedMimeType === 'text/plain' || lowerFilename.endsWith('.txt');
+  if (!isPdf && !isDocx && !isTxt) return null;
+  return {
+    filename,
+    mimeType: isPdf ? 'application/pdf' : isDocx ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/plain',
+    isPdf,
+    isDocx,
+    isTxt
+  };
+}
+
+function directUploadPathBelongsToWorkspace(storagePath: string, workspaceId: string): boolean {
+  return storagePath.startsWith(`${workspaceId}/tenancy-agreements/`) && !storagePath.includes('..') && storagePath.length <= 1024;
+}
+
+function stringProperty(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function numericProperty(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN;
+}
+
 function stageForExtractionError(error: unknown, mimeType: string): UploadStage {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : error instanceof Error ? error.message : '';
   if (/ocr/i.test(code)) return 'ocr';
@@ -129,8 +164,8 @@ function stableErrorMessage(code: string): string {
     'workspace-required': 'An active workspace is required to upload a tenancy agreement.',
     'permission-denied': 'You do not have permission to upload tenancy agreements.',
     'cross-site-request-blocked': 'This upload request was blocked by origin protection.',
-    'request-too-large': 'The upload request is too large.',
-    'file-too-large': 'The uploaded file is too large.',
+    'request-too-large': 'The tenancy upload exceeds the 50 MB limit.',
+    'file-too-large': 'The tenancy file exceeds the 50 MB limit.',
     'unsupported-file-type': 'Only PDF, DOCX, and TXT tenancy agreements are supported.',
     'invalid-file-signature': 'The file content does not match the selected document type.',
     'duplicate-document': 'This document has already been uploaded to the active workspace.',
@@ -144,6 +179,8 @@ function stableErrorMessage(code: string): string {
     'ocr_page_preparation_failed': 'A scanned PDF page could not be prepared for OCR.',
     'ocr_page_out_of_range': 'A scanned PDF page could not be prepared for OCR.',
     'ocr_processing_failed': 'The OCR stage could not complete.',
+    'invalid-upload-session': 'The uploaded file could not be verified for this workspace.',
+    'uploaded-file-unavailable': 'The uploaded file is no longer available for processing.',
     'database-unavailable': 'The document service is temporarily unavailable.',
     'request-failed': 'The tenancy upload could not be completed.'
   };
@@ -190,6 +227,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         error: message,
         message,
         requestId,
+        ...(code === 'request-too-large' || code === 'file-too-large' ? { maxUploadBytes: maxTenancyUploadBytes } : {}),
         ...extras
       });
     };
@@ -209,7 +247,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
 
     try {
       stage = 'validation';
-      const requestSizeError = dependencies.rejectOversizedRequest(request, maxUploadBytes + 1024 * 1024);
+      const requestSizeError = dependencies.rejectOversizedRequest(request, maxTenancyUploadRequestBytes);
       if (requestSizeError) return normalizeGuardResponse(requestSizeError, 'validation');
 
       stage = 'auth';
@@ -228,41 +266,132 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         role
       });
 
-      stage = 'upload';
-      let formData: FormData;
-      try {
-        formData = await request.formData();
-      } catch {
-        return fail(400, 'upload', 'invalid-multipart-body');
+      const contentType = request.headers.get('content-type') ?? '';
+      let fileName = '';
+      let fileSize = 0;
+      let mimeType = '';
+      let isPdf = false;
+      let isDocx = false;
+      let isTxt = false;
+      let buffer: Buffer;
+      let directStorageUpload = false;
+
+      if (contentType.includes('application/json')) {
+        let payload: Record<string, unknown>;
+        try {
+          const body = await request.json();
+          if (!isRecord(body)) return fail(400, 'validation', 'invalid-upload-session');
+          payload = body;
+        } catch {
+          return fail(400, 'validation', 'invalid-upload-session');
+        }
+
+        const action = stringProperty(payload.action);
+        fileName = stringProperty(payload.filename);
+        const descriptor = tenancyFileDescriptor(fileName, stringProperty(payload.mimeType));
+        fileSize = numericProperty(payload.fileSize);
+        if (!descriptor || !Number.isInteger(fileSize) || fileSize <= 0) return fail(400, 'validation', 'unsupported-file-type');
+        if (fileSize > maxTenancyUploadBytes) return fail(413, 'validation', 'file-too-large');
+
+        if (action === 'prepare') {
+          stage = 'storage';
+          storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(fileName));
+          const signedUpload = await supabase.storage.from(storageBucket).createSignedUploadUrl(storagePath);
+          if (signedUpload.error || !signedUpload.data) throw signedUpload.error ?? new Error('signed-upload-unavailable');
+          return respond(200, {
+            success: true,
+            action: 'prepare',
+            requestId,
+            maxUploadBytes: maxTenancyUploadBytes,
+            upload: {
+              signedUrl: signedUpload.data.signedUrl,
+              storagePath,
+              mimeType: descriptor.mimeType,
+              fileSize
+            }
+          });
+        }
+
+        if (action !== 'finalize') return fail(400, 'validation', 'invalid-upload-session');
+        storagePath = stringProperty(payload.storagePath);
+        if (!directUploadPathBelongsToWorkspace(storagePath, workspaceId)) return fail(403, 'validation', 'invalid-upload-session');
+
+        stage = 'storage';
+        const downloadStartedAt = Date.now();
+        const storage = supabase.storage.from(storageBucket);
+        const storedInfo = await storage.info(storagePath);
+        if (storedInfo.error || !storedInfo.data) return fail(422, stage, 'uploaded-file-unavailable');
+        const storedSize = Number(storedInfo.data.size ?? storedInfo.data.metadata?.size);
+        if (!Number.isFinite(storedSize) || storedSize <= 0) return fail(422, stage, 'uploaded-file-unavailable');
+        if (storedSize > maxTenancyUploadBytes) {
+          await storage.remove([storagePath]);
+          return fail(413, 'validation', 'file-too-large');
+        }
+        const storedUpload = await storage.download(storagePath);
+        if (storedUpload.error || !storedUpload.data) return fail(422, stage, 'uploaded-file-unavailable');
+        fileSize = storedUpload.data.size;
+        if (fileSize > maxTenancyUploadBytes) {
+          await storage.remove([storagePath]);
+          return fail(413, 'validation', 'file-too-large');
+        }
+        if (fileSize !== storedSize) return fail(422, stage, 'uploaded-file-unavailable');
+        buffer = Buffer.from(await storedUpload.data.arrayBuffer());
+        directStorageUpload = true;
+        uploadedPath = storagePath;
+        uploadedStorageReference = storagePath;
+        logExtractionDiagnostic('storage_completed', {
+          requestId,
+          stage,
+          fileSize,
+          elapsedMs: Date.now() - downloadStartedAt
+        });
+      } else {
+        stage = 'upload';
+        let formData: FormData;
+        try {
+          formData = await request.formData();
+        } catch {
+          return fail(400, 'upload', 'invalid-multipart-body');
+        }
+        const file = formData.get('file');
+        if (!(file instanceof File)) return fail(400, 'upload', 'missing-file');
+        fileName = file.name;
+        fileSize = file.size;
+        const descriptor = tenancyFileDescriptor(fileName, file.type);
+        if (!descriptor) return fail(400, 'validation', 'unsupported-file-type');
+        mimeType = descriptor.mimeType;
+        isPdf = descriptor.isPdf;
+        isDocx = descriptor.isDocx;
+        isTxt = descriptor.isTxt;
+        if (fileSize > maxTenancyUploadBytes) return fail(413, 'validation', 'file-too-large');
+        buffer = Buffer.from(await file.arrayBuffer());
       }
-      const file = formData.get('file');
-      if (!(file instanceof File)) return fail(400, 'upload', 'missing-file');
 
-      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-      const isDocx = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.toLowerCase().endsWith('.docx');
-      const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
-      const mimeType = isPdf ? 'application/pdf' : isDocx ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/plain';
-
+      const descriptor = tenancyFileDescriptor(fileName, mimeType);
+      if (!descriptor) return fail(400, 'validation', 'unsupported-file-type');
+      mimeType = descriptor.mimeType;
+      isPdf = descriptor.isPdf;
+      isDocx = descriptor.isDocx;
+      isTxt = descriptor.isTxt;
       logExtractionDiagnostic('file_received', {
         requestId,
-        stage: 'upload',
-        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : isTxt ? 'txt' : 'unsupported',
-        fileSize: file.size
+        stage: directStorageUpload ? 'storage' : 'upload',
+        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+        fileSize
       });
 
       stage = 'validation';
-      if (!isPdf && !isDocx && !isTxt) return fail(400, stage, 'unsupported-file-type');
-      if (file.size > maxUploadBytes) return fail(413, stage, 'file-too-large');
-
-      const buffer = Buffer.from(await file.arrayBuffer());
-      if (!dependencies.validateFileSignature(buffer, mimeType)) return fail(400, stage, 'invalid-file-signature');
+      if (!dependencies.validateFileSignature(buffer, mimeType)) {
+        if (directStorageUpload) await supabase.storage.from(storageBucket).remove([storagePath]);
+        return fail(400, stage, 'invalid-file-signature');
+      }
 
       const config = dependencies.getOpenAiConfiguration();
       logExtractionDiagnostic('file_validated', {
         requestId,
         stage,
         fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
-        fileSize: file.size,
+        fileSize,
         openAiConfigured: config.configured,
         tenancyModel: config.tenancyModel
       });
@@ -274,6 +403,13 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
       if (duplicate.error) throw duplicate.error;
       if (duplicate.data) {
         existingDocument = duplicate.data as ExistingDocument;
+        if (directStorageUpload && storagePath !== existingDocument.storage_path) {
+          const cleanup = await supabase.storage.from(storageBucket).remove([storagePath]);
+          if (cleanup.error) {
+            logExtractionFailure('duplicate_upload_cleanup_failed', 'storage-cleanup-failed');
+          }
+          uploadedPath = null;
+        }
         const latestExtraction = await supabase.from('document_extractions')
           .select('id, raw_text, extracted_json, confidence_json, ai_summary, ai_model, extraction_engine, extraction_status, created_at')
           .eq('workspace_id', workspaceId)
@@ -323,10 +459,10 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
             warnings: ['Existing document reused'],
             confidence: extraction.legalIntelligence.confidence,
             document: {
-              originalFilename: existingDocument.original_filename ?? file.name,
+              originalFilename: existingDocument.original_filename ?? fileName,
               storagePath: existingDocument.storage_path ?? '',
               mimeType: existingDocument.mime_type ?? mimeType,
-              fileSize: existingDocument.file_size ?? file.size,
+              fileSize: existingDocument.file_size ?? fileSize,
               documentType: existingDocument.document_type ?? extraction.document.documentType,
               uploadStatus: existingDocument.upload_status ?? 'uploaded',
               documentHash: existingDocument.document_hash ?? documentHash
@@ -351,32 +487,33 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         });
       } else {
         stage = 'storage';
-        storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(file.name));
-        const uploadStartedAt = Date.now();
-        const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
-        if (upload.error) throw upload.error;
-        uploadedPath = storagePath;
-        uploadedStorageReference = String(upload.data?.id ?? upload.data?.path ?? '');
-        logExtractionDiagnostic('storage_completed', {
-          requestId,
-          stage,
-          fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
-          fileSize: file.size,
-          elapsedMs: Date.now() - uploadStartedAt
-        });
+        if (!directStorageUpload) {
+          storagePath = dependencies.workspaceStoragePath(workspaceId, 'tenancy-agreements', sanitizeStorageFilename(fileName));
+          const uploadStartedAt = Date.now();
+          const upload = await supabase.storage.from(storageBucket).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
+          if (upload.error) throw upload.error;
+          uploadedPath = storagePath;
+          uploadedStorageReference = String(upload.data?.id ?? upload.data?.path ?? '');
+          logExtractionDiagnostic('storage_completed', {
+            requestId,
+            stage,
+            fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+            fileSize,
+            elapsedMs: Date.now() - uploadStartedAt
+          });
+        }
         logExtractionDiagnostic('upload_success', {
           requestId,
           stage: 'storage',
           fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
-          fileSize: file.size,
-          elapsedMs: Date.now() - uploadStartedAt
+          fileSize
         });
       }
 
       let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
       stage = isPdf ? 'pdf' : isDocx ? 'docx' : 'parser';
       try {
-        extraction = await dependencies.extractTenancyFile({ buffer, filename: file.name, mimeType }, {
+        extraction = await dependencies.extractTenancyFile({ buffer, filename: fileName, mimeType }, {
           maxOutputTokens: 6_000,
           timeoutMs: 120_000,
           maxAttempts: 2,
@@ -398,12 +535,12 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         const bundle = await supabase.rpc('upload_end_to_end_preserve_failed_upload', {
           p_workspace_id: workspaceId,
           p_payload: {
-            originalFilename: file.name,
+            originalFilename: fileName,
             sanitizedFilename,
             storageBucket,
             storagePath,
             mimeType,
-            fileSize: file.size,
+            fileSize,
             documentType: 'tenancy_agreement',
             processingStatus: 'extraction_failed',
             documentHash,
@@ -455,10 +592,10 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         warnings: existingDocument ? ['Existing document reused'] : extraction.legalIntelligence.warnings,
         confidence: extraction.legalIntelligence.confidence,
         document: {
-          originalFilename: existingDocument?.original_filename ?? file.name,
+          originalFilename: existingDocument?.original_filename ?? fileName,
           storagePath,
           mimeType: existingDocument?.mime_type ?? mimeType,
-          fileSize: existingDocument?.file_size ?? file.size,
+          fileSize: existingDocument?.file_size ?? fileSize,
           documentType: existingDocument?.document_type ?? extraction.document.documentType,
           uploadStatus: existingDocument?.upload_status ?? 'uploaded',
           documentHash: existingDocument?.document_hash ?? documentHash

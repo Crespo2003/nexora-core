@@ -22,6 +22,7 @@ import {
   type MappedMoney,
   type TenancyMappedForm
 } from '../lib/tenancy/mapTenancyExtractionToForm';
+import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -120,7 +121,6 @@ type UploadedDocument = {
 type TenancyForm = TenancyMappedForm;
 type ImportReviewForm = TenancyMappedForm;
 
-const maxUploadBytes = 10 * 1024 * 1024;
 const todayIso = currentIsoDate();
 const currentMonth = currentIsoMonth();
 
@@ -131,6 +131,49 @@ const currency = new Intl.NumberFormat('en-MY', {
 });
 
 const getSupabaseClient = getBrowserSupabaseClient;
+
+type PreparedTenancyUpload = {
+  signedUrl: string;
+  storagePath: string;
+  mimeType: string;
+  fileSize: number;
+};
+
+function uploadToSignedStorage(file: File, upload: PreparedTenancyUpload, onProgress: (progress: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', upload.signedUrl);
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+      let message = 'The file upload could not be completed.';
+      try {
+        const payload = JSON.parse(xhr.responseText) as { message?: unknown; error?: unknown };
+        if (typeof payload.message === 'string') message = payload.message;
+        else if (typeof payload.error === 'string') message = payload.error;
+      } catch {
+        // Keep the safe client-side error if Storage does not return JSON.
+      }
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error('The file upload connection was interrupted.'));
+
+    // Direct browser-to-Storage upload keeps the 50 MB file out of the Next.js request body.
+    const body = new FormData();
+    body.append('cacheControl', '3600');
+    body.append('', file);
+    xhr.send(body);
+  });
+}
 
 function emptyForm(): TenancyForm {
   return {
@@ -576,6 +619,7 @@ export default function RentalCommandCentre() {
   const [importErrors, setImportErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [importState, setImportState] = useState<ImportState>('idle');
   const [importFailedStage, setImportFailedStage] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | null>(null);
   const [documentViewStatus, setDocumentViewStatus] = useState('');
   const userEditedFields = useRef<Set<EditableTenancyFormField>>(new Set());
@@ -867,7 +911,7 @@ export default function RentalCommandCentre() {
       setNotice({ tone: 'error', message: t.notices.unsupportedFile });
       return;
     }
-    if (importFile.size > maxUploadBytes) {
+    if (importFile.size > maxTenancyUploadBytes) {
       setNotice({ tone: 'error', message: t.notices.fileTooLarge });
       return;
     }
@@ -875,11 +919,44 @@ export default function RentalCommandCentre() {
     setOperationId('parse-import');
     setImportState('uploading');
     setImportFailedStage('');
+    setUploadProgress(0);
     try {
-      const body = new FormData();
-      body.append('file', importFile);
-      const response = await fetch('/api/tenancy-import/upload', { method: 'POST', body });
+      const prepareResponse = await fetch('/api/tenancy-import/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'prepare',
+          filename: importFile.name,
+          mimeType: importFile.type,
+          fileSize: importFile.size
+        })
+      });
+      const prepared = await readJsonApiResponse(prepareResponse) as {
+        error?: unknown;
+        stage?: unknown;
+        code?: unknown;
+        upload?: PreparedTenancyUpload;
+      };
+      if (!prepareResponse.ok || !prepared.upload?.signedUrl || !prepared.upload.storagePath) {
+        const stage = typeof prepared.stage === 'string' ? prepared.stage : 'upload';
+        const code = typeof prepared.code === 'string' ? prepared.code : '';
+        const message = apiErrorMessage(prepared.error ?? t.errors.parseFailed, language);
+        throw new Error(code ? `[${stage}:${code}] ${message}` : `[${stage}] ${message}`);
+      }
+
+      await uploadToSignedStorage(importFile, prepared.upload, setUploadProgress);
       setImportState('parsing');
+      const response = await fetch('/api/tenancy-import/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'finalize',
+          filename: importFile.name,
+          mimeType: prepared.upload.mimeType,
+          fileSize: importFile.size,
+          storagePath: prepared.upload.storagePath
+        })
+      });
       const payload = await readJsonApiResponse(response) as {
         error?: unknown;
         stage?: unknown;
@@ -915,6 +992,7 @@ export default function RentalCommandCentre() {
       setImportFailedStage(t.uploadTenancyAgreement);
       setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
+      setUploadProgress(null);
       setOperationId(null);
     }
   }
@@ -1078,11 +1156,17 @@ export default function RentalCommandCentre() {
                   aria-label={t.uploadPdfDocx}
                   type="file"
                   accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                  onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) => { setImportFile(event.target.files?.[0] ?? null); setUploadProgress(null); }}
                 />
                 <h3>{t.dropDocument}</h3>
-                <p>{t.supportedFiles}</p>
+                <p>{t.supportedFiles} {language === 'zh' ? '最大 50 MB。' : 'Maximum 50 MB.'}</p>
                 {importFile && <p><strong>{t.selectedFile}:</strong> {importFile.name}</p>}
+                {uploadProgress !== null && (
+                  <div aria-live="polite">
+                    <div className="progress-track"><span style={{ width: `${uploadProgress}%` }} /></div>
+                    <p>{language === 'zh' ? `正在上传：${uploadProgress}%` : `Uploading: ${uploadProgress}%`}</p>
+                  </div>
+                )}
                 <button className="secondary-button" onClick={parseImportFile} disabled={!importFile || operationId === 'parse-import'}>
                   {operationId === 'parse-import' ? t.parsingDocument : t.extractDetails}
                 </button>
