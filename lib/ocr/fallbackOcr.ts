@@ -1,7 +1,9 @@
-import type { OcrProvider, OcrResult } from './ocrProvider';
+import type { OcrProvider, OcrRequestContext, OcrResult } from './ocrProvider';
 
 export class FallbackOcrProvider implements OcrProvider {
-  async extractText(_input: { buffer: Buffer; mimeType: string; filename: string }): Promise<OcrResult> {
+  readonly providerName = 'unconfigured';
+
+  async extractText(_input: { buffer: Buffer; mimeType: string; filename: string }, _context?: OcrRequestContext): Promise<OcrResult> {
     return {
       status: 'not_configured',
       text: '',

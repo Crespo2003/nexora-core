@@ -6,6 +6,16 @@ type DiagnosticDetails = {
   fileSize?: number;
   textLength?: number;
   usedOcr?: boolean;
+  pageNumber?: number;
+  pageCount?: number;
+  scannedPageCount?: number;
+  hasImages?: boolean;
+  ocrProvider?: string;
+  payloadType?: string;
+  payloadBytes?: number;
+  inputKind?: string;
+  ocrStatus?: string;
+  ocrCode?: string;
   openAiConfigured?: boolean;
   openAiKeyPresent?: boolean;
   configurationReason?: string;

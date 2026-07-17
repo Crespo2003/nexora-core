@@ -2,6 +2,7 @@ import { isoToDisplayDate } from '../dates/formatDate';
 import { extractDocumentText } from '../documents/extractText';
 import {
   extractTenancyText,
+  TenancyExtractionError,
   type TenancyDocumentInput,
   type TenancyLegalIntelligence,
   type TenancyProcessingResult
@@ -123,9 +124,9 @@ export async function extractTenancyFile(
   input: TenancyDocumentInput,
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
-  const text = await extractDocumentText(input, options.ocrProvider);
+  const text = await extractDocumentText(input, options.ocrProvider, { requestId: options.requestId });
   if (text.status !== 'completed' || !text.text.trim()) {
-    throw new Error(text.usedOcr || /ocr/i.test(text.error) ? 'ocr_failed' : 'text_extraction_failed');
+    throw new TenancyExtractionError(text.error || (text.usedOcr ? 'ocr_failed' : 'text_extraction_failed'));
   }
   const aiConfigured = Boolean(options.apiKey?.trim()) || getOpenAiConfiguration().configured;
   try {

@@ -67,6 +67,13 @@ function stableErrorMessage(code: string): string {
     'openai_timeout': 'AI extraction timed out; the deterministic fallback could not complete.',
     'text_extraction_failed': 'The document did not contain enough readable text for extraction.',
     'ocr_failed': 'OCR could not extract readable text from this document.',
+    'ocr_not_configured': 'OCR is not configured for scanned document pages.',
+    'ocr_provider_timeout': 'The OCR provider timed out while reading a scanned page.',
+    'ocr_provider_request_failed': 'The OCR provider could not read a scanned page.',
+    'ocr_malformed_or_empty_response': 'The OCR provider returned no readable text for a scanned page.',
+    'ocr_page_preparation_failed': 'A scanned PDF page could not be prepared for OCR.',
+    'ocr_page_out_of_range': 'A scanned PDF page could not be prepared for OCR.',
+    'ocr_processing_failed': 'The OCR stage could not complete.',
     'database-unavailable': 'The document service is temporarily unavailable.',
     'request-failed': 'The tenancy upload could not be completed.'
   };
@@ -102,11 +109,13 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
 
     const fail = (status: number, failureStage: UploadStage, code: string, extras: Record<string, unknown> = {}) => {
       stage = failureStage;
+      const message = stableErrorMessage(code);
       return respond(status, {
         success: false,
         stage: failureStage,
         code,
-        error: stableErrorMessage(code),
+        error: message,
+        message,
         requestId,
         ...extras
       });
@@ -206,6 +215,13 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
       logExtractionDiagnostic('storage_completed', {
         requestId,
         stage,
+        fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
+        fileSize: file.size,
+        elapsedMs: Date.now() - uploadStartedAt
+      });
+      logExtractionDiagnostic('upload_success', {
+        requestId,
+        stage: 'storage',
         fileType: isPdf ? 'pdf' : isDocx ? 'docx' : 'txt',
         fileSize: file.size,
         elapsedMs: Date.now() - uploadStartedAt
