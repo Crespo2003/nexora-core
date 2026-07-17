@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { DateInput } from '../../lib/dates/DateInput';
 import { formatNexoraDate } from '../../lib/dates/formatDate';
+import { formatMYR } from '../../lib/formatters';
 
 export type PropertyIntelligenceView = 'intelligence' | 'analysis' | 'comparables' | 'nearby' | 'score' | 'map';
 type Row = Record<string, unknown> & { id: string };
@@ -203,7 +204,7 @@ function Narrative({ title, value }: { title: string; value: unknown }) { return
 async function api(url: string, init?: RequestInit) { const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } }); const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || 'request-failed'); return data; }
 function message(error: unknown) { const code = error instanceof Error ? error.message : 'request-failed'; return ({ 'tables-missing': 'Sprint 007 database migration has not been applied.', 'database-unavailable': 'The database is unavailable.', 'duplicate-record': 'An analysis or source reference already exists.', 'permission-denied': 'You do not have permission for this action.', 'property-source-not-found': 'The source property is unavailable or restricted.' } as Record<string,string>)[code] ?? 'The property intelligence request could not be completed.'; }
 function nullableNumber(value: FormDataEntryValue | unknown) { if (value === '' || value === null || value === undefined) return null; const number = Number(value); return Number.isFinite(number) ? number : null; }
-function money(value: unknown) { if (value === null || value === undefined || value === '') return '-'; return new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR', maximumFractionDigits: 0 }).format(Number(value)); }
+function money(value: unknown) { return formatMYR(value, '-'); }
 function percent(value: unknown) { return value === null || value === undefined || value === '' ? '-' : `${Number(value).toFixed(1)}%`; }
 function array(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }
 function mapBounds(points: Array<{ latitude: number; longitude: number }>) { const latitudes = points.map((p) => p.latitude), longitudes = points.map((p) => p.longitude); return { minLat: Math.min(...latitudes), maxLat: Math.max(...latitudes), minLng: Math.min(...longitudes), maxLng: Math.max(...longitudes) }; }

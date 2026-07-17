@@ -298,9 +298,9 @@ function evaluateClauseRisks(facts: Facts, clauses: LegalClause[], rawText: stri
   const financial = record(facts.financial);
   const rental = money(financial.monthly_rental);
   const securityMonths = statedMonths(rawText, /security\s+deposit[\s\S]{0,90}?((?:\d+(?:\.\d+)?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve))\s*months?/i);
-  if (securityMonths && rental && Math.abs(rental * securityMonths - money(financial.security_deposit)) > 1) add('security_deposit_multiple_mismatch', 'high', 'Security deposit', 'Security deposit mismatch', 'The security deposit does not match the stated rental multiple.', 'Reconcile the stated multiple and payable amount.', sourceForPattern(rawText, /security\s+deposit[\s\S]{0,120}/i));
+  if (securityMonths && rental && Math.abs(rental * securityMonths - money(financial.security_deposit)) > 1) add('security_deposit_multiple_mismatch', 'high', 'Security deposit', 'Requires confirmation: security deposit mismatch', `The extracted security deposit is preserved, but it conflicts with the stated ${securityMonths}-month rental multiple.`, 'Requires confirmation: reconcile the stated multiple and payable amount without overwriting the extracted value.', sourceForPattern(rawText, /security\s+deposit[\s\S]{0,120}/i));
   const utilityMonths = statedMonths(rawText, /utility\s+deposit[\s\S]{0,90}?((?:\d+(?:\.\d+)?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve))\s*months?/i);
-  if (utilityMonths && rental && Math.abs(rental * utilityMonths - money(financial.utility_deposit)) > 1) add('utility_deposit_multiple_mismatch', 'high', 'Utility deposit', 'Utility deposit mismatch', 'The utility deposit does not match the stated rental multiple.', 'Reconcile the stated multiple and payable amount.', sourceForPattern(rawText, /utility\s+deposit[\s\S]{0,120}/i));
+  if (utilityMonths && rental && Math.abs(rental * utilityMonths - money(financial.utility_deposit)) > 1) add('utility_deposit_multiple_mismatch', 'high', 'Utility deposit', 'Requires confirmation: utility deposit mismatch', `The extracted utility deposit is preserved, but it conflicts with the stated ${utilityMonths}-month rental multiple.`, 'Requires confirmation: reconcile the stated multiple and payable amount without overwriting the extracted value.', sourceForPattern(rawText, /utility\s+deposit[\s\S]{0,120}/i));
   const tenancy = record(facts.tenancy);
   const start = text(tenancy.commencement_date);
   const end = text(tenancy.expiry_date);
@@ -438,11 +438,11 @@ function normalizedFields(facts: Facts): Record<string, string> {
   const financial = record(facts.financial);
   const tenancy = record(facts.tenancy);
   return {
-    monthly_rental: money(financial.monthly_rental) ? `RM${formatMoney(money(financial.monthly_rental))}` : '',
-    security_deposit: money(financial.security_deposit) ? `RM${formatMoney(money(financial.security_deposit))}` : '',
-    utility_deposit: money(financial.utility_deposit) ? `RM${formatMoney(money(financial.utility_deposit))}` : '',
-    access_card_deposit: money(financial.access_card_deposit) ? `RM${formatMoney(money(financial.access_card_deposit))}` : '',
-    car_park_deposit: money(financial.car_park_deposit) ? `RM${formatMoney(money(financial.car_park_deposit))}` : '',
+    monthly_rental: money(financial.monthly_rental) ? formatMYR(money(financial.monthly_rental)) : '',
+    security_deposit: money(financial.security_deposit) ? formatMYR(money(financial.security_deposit)) : '',
+    utility_deposit: money(financial.utility_deposit) ? formatMYR(money(financial.utility_deposit)) : '',
+    access_card_deposit: money(financial.access_card_deposit) ? formatMYR(money(financial.access_card_deposit)) : '',
+    car_park_deposit: money(financial.car_park_deposit) ? formatMYR(money(financial.car_park_deposit)) : '',
     commencement_date: formatNexoraDate(text(tenancy.commencement_date)),
     expiry_date: formatNexoraDate(text(tenancy.expiry_date)),
     payment_due_day: text(tenancy.payment_due_day),
@@ -548,7 +548,7 @@ function moneyImpact(value: string): string {
 
 function firstMoney(value: string): string {
   const match = value.match(/(?:RM|MYR)\s*([\d,]+(?:\.\d{1,2})?)/i);
-  return match ? `RM${match[1]}` : '';
+  return match ? formatMYR(Number(match[1].replace(/,/g, ''))) : '';
 }
 
 function labelledMoneyValues(value: string, pattern: RegExp): number[] {

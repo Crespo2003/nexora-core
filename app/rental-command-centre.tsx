@@ -25,7 +25,7 @@ import {
   type TenancyMappedForm
 } from '../lib/tenancy/mapTenancyExtractionToForm';
 import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
-import { formatMYR } from '../lib/formatters';
+import { formatMYR, parseMYR } from '../lib/formatters';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -1408,7 +1408,7 @@ function TenancyFields({
       <Field type="date" label={t.commencementDate} value={form.commencementDate} error={errors.commencementDate} onChange={(value) => onChange('commencementDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.commencement_date')} language={language} required />
       <Field type="date" label={t.expiryDate} value={form.expiryDate} error={errors.expiryDate} onChange={(value) => onChange('expiryDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.expiry_date')} language={language} required />
       <Field type="date" label={t.renewalReminder} value={form.renewalReminder} error={errors.renewalReminder} onChange={(value) => onChange('renewalReminder', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
-      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
+      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} wide multiline />
       <Field label={t.noticePeriod} value={form.noticePeriod} error={errors.noticePeriod} onChange={(value) => onChange('noticePeriod', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.notice_period')} language={language} />
       <Field label={t.tenantIdNo} value={form.tenantIdentification} error={errors.tenantIdentification} onChange={(value) => onChange('tenantIdentification', value)} confidence={confidenceFor(fieldConfidence, 'tenant.ic_passport')} language={language} />
       <Field label={t.tenantPhone} value={form.tenantPhone} error={errors.tenantPhone} onChange={(value) => onChange('tenantPhone', value)} confidence={confidenceFor(fieldConfidence, 'tenant.phone')} language={language} />
@@ -1476,6 +1476,7 @@ function Field({
   onChange,
   type = 'text',
   wide = false,
+  multiline = false,
   required = false,
   placeholder = '',
   error = '',
@@ -1487,6 +1488,7 @@ function Field({
   onChange: (value: string) => void;
   type?: string;
   wide?: boolean;
+  multiline?: boolean;
   required?: boolean;
   placeholder?: string;
   error?: string;
@@ -1496,7 +1498,9 @@ function Field({
   return (
     <label className={wide ? 'wide field' : 'field'}>
       <span>{label}{required ? ' *' : ''}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      {type === 'date'
+      {multiline
+        ? <textarea rows={3} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+        : type === 'date'
         ? <DateInput value={value} required={required} placeholder={placeholder || 'DD/MM/YYYY'} onValueChange={onChange} />
         : <input type={type} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />}
       {error && <em>{error}</em>}
@@ -1520,10 +1524,12 @@ function NumberField({
   language: Language;
 }) {
   const t = getTranslations(language);
+  const [focused, setFocused] = useState(false);
+  const editingValue = value === '' ? '' : String(value);
   return (
     <label className="field">
       <span>{label}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      <input type="number" min="0" placeholder={t.placeholders.amount} value={value} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} />
+      <input type="text" inputMode="decimal" placeholder={t.placeholders.amount} value={focused ? editingValue : formatMYR(value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onChange={(event) => { const amount = parseMYR(event.target.value); onChange(event.target.value === '' ? '' : amount ?? value); }} />
       {error && <em>{error}</em>}
     </label>
   );

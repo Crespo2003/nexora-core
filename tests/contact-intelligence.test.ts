@@ -4,6 +4,7 @@ import test from 'node:test';
 import { normalizePropertyAddress } from '../lib/contacts/address';
 import { isConfirmedCollectionContact, normalizePhone } from '../lib/contacts/phone';
 import { formatMYR, parseMYR } from '../lib/formatters';
+import { normalizeIdentification } from '../lib/ai/tenancyExtractionContract';
 
 test('formats Malaysian currency only when an amount is confirmed', () => {
   assert.equal(formatMYR(12500), 'RM 12,500.00');
@@ -42,6 +43,12 @@ test('normalizes Malaysian property addresses without replacing the source text'
   assert.equal(address.state, 'Kuala Lumpur');
   assert.equal(address.country, 'Malaysia');
   assert.equal(address.originalAddress.includes('  '), true);
+});
+
+test('removes identity labels without changing the identification value', () => {
+  assert.equal(normalizeIdentification('NRICNo:750514-14-5544'), '750514-14-5544');
+  assert.equal(normalizeIdentification('Passport No: A1234567'), 'A1234567');
+  assert.equal(normalizeIdentification('Company No: 202001234567'), '202001234567');
 });
 
 test('contact migration is workspace-scoped and RLS-protected', () => {

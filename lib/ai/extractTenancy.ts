@@ -6,6 +6,7 @@ import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIn
 import { logExtractionDiagnostic } from './extractionDiagnostics';
 import { formatNexoraDate } from '../dates/formatDate';
 import { formatMYR } from '../formatters';
+import { normalizeIdentification } from './tenancyExtractionContract';
 import {
   canonicalTenancyExtractionSchema,
   parseOpenAITenancyResponse,
@@ -442,7 +443,7 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
   };
   const party = (value: Partial<LegalParty> | undefined): LegalParty => ({
-    name: text(value?.name), company: text(value?.company), ic_passport: text(value?.ic_passport).replace(/\s+/g, ''),
+    name: text(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
     phone: normalizeMalaysianPhone(text(value?.phone)), email: normalizeEmail(text(value?.email))
   });
   return {

@@ -1,3 +1,5 @@
+import { formatMYR } from '../formatters';
+
 export type ProposalListing = {
   title: string;
   area?: string;
@@ -18,5 +20,5 @@ export function formatProposalText(listings: ProposalListing[], language: 'en' |
 function size(value?: number | null) { return value == null ? 'To verify / 待确认' : `${value.toLocaleString('en-MY')} sq ft`; }
 function price(item: ProposalListing) {
   const value = item.askingRental ?? item.askingSalePrice;
-  return value == null ? 'To verify / 待确认' : new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR', maximumFractionDigits: 0 }).format(value);
+  return value == null ? 'To verify / 待确认' : formatMYR(value);
 }

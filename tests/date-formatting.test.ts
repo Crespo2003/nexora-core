@@ -28,6 +28,8 @@ test('date inputs accept only DD/MM/YYYY and retain ISO storage at the boundary'
   assert.equal(displayDateToIso('31/02/2027'), null);
   assert.equal(displayDateToIso('01/05/27'), null);
   assert.equal(displayDateToIso('05-01-2027'), null);
+  assert.equal(displayDateToIso('29/02/2028'), '2028-02-29');
+  assert.equal(displayDateToIso('29/02/2027'), null);
 });
 
 test('timestamps use Malaysia time without shifting the displayed date', () => {
@@ -37,4 +39,6 @@ test('timestamps use Malaysia time without shifting the displayed date', () => {
   assert.equal(displayDateTimeToIso('2026-07-17T16:30:00.000Z'), '2026-07-17T16:30:00.000Z');
   assert.equal(displayDateTimeToIso('18/07/2026 25:00'), null);
   assert.equal(addDaysToIsoDate('2026-07-31', 1), '2026-08-01');
+  assert.equal(addDaysToIsoDate('2028-02-28', 1), '2028-02-29');
+  assert.equal(addDaysToIsoDate('2027-12-31', 1), '2028-01-01');
 });

@@ -216,8 +216,8 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
   const object = (key: string) => asObject(source[key]) ?? {};
   const strings = (sourceValue: Record<string, unknown>, keys: readonly string[]) => Object.fromEntries(keys.map((key) => [key, normalizeText(sourceValue[key])])) as Record<string, string>;
   const document = strings(object('document'), ['type', 'language', 'summary']);
-  const tenant = strings(object('tenant'), ['name', 'company', 'identification', 'phone', 'email']);
-  const landlord = strings(object('landlord'), ['name', 'company', 'identification', 'phone', 'email']);
+  const tenant = { ...strings(object('tenant'), ['name', 'company', 'identification', 'phone', 'email']), identification: normalizeIdentification(object('tenant').identification) };
+  const landlord = { ...strings(object('landlord'), ['name', 'company', 'identification', 'phone', 'email']), identification: normalizeIdentification(object('landlord').identification) };
   const property = strings(object('property'), ['name', 'unit_number', 'address', 'property_type', 'build_up', 'land_area', 'car_parks']);
   const tenancySource = object('tenancy');
   const tenancy = {
@@ -258,6 +258,13 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
     risks: normalizeRisks(source.risks),
     warnings: normalizeStringArray(source.warnings)
   };
+}
+
+/** Removes document labels while retaining the actual NRIC, passport, or registration value. */
+export function normalizeIdentification(value: unknown): string {
+  return normalizeText(value)
+    .replace(/^(?:(?:nric|ic|passport|company|registration)\s*(?:no|number)?|name|date)\s*[:#-]?\s*/i, '')
+    .trim();
 }
 
 export function validateCanonicalTenancyExtraction(value: CanonicalTenancyExtraction): string[] {
