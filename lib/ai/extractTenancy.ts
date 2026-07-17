@@ -1,6 +1,7 @@
 import type { OcrProvider } from '../ocr/ocrProvider';
 import { extractDocumentText } from '../documents/extractText';
 import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
+import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 
 export type LegalParty = {
   name: string;
@@ -290,12 +291,12 @@ export async function extractTenancyText(
   options: ExtractTenancyOptions = {}
 ): Promise<Omit<TenancyProcessingResult, 'pageCount' | 'usedOcr'>> {
   const normalizedText = normalizeDocumentText(rawText);
-  if (normalizedText.length < 80) throw new TenancyExtractionError('insufficient-document-text');
+  if (normalizedText.length < 80) throw new TenancyExtractionError('text_extraction_failed');
 
-  const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new TenancyExtractionError('openai-not-configured');
+  const apiKey = options.apiKey?.trim() || getOpenAiApiKey();
+  if (!apiKey) throw new TenancyExtractionError('openai_not_configured');
 
-  const model = options.model ?? process.env.OPENAI_TENANCY_MODEL ?? 'gpt-5.5';
+  const model = options.model?.trim() || getOpenAiConfiguration().tenancyModel;
   const chunks = splitTenancyDocument(normalizedText, options.maxChunkCharacters);
   const partials: TenancyLegalIntelligence[] = [];
 

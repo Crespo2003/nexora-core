@@ -191,6 +191,18 @@ function apiErrorMessage(error: unknown, language: Language): string {
   return message || t.errors.unknown;
 }
 
+function extractionProviderMessage(extraction: TenancyExtraction, language: Language): string {
+  if (extraction.provider === 'openai' && !extraction.fallbackUsed) {
+    return language === 'zh'
+      ? `AI 提取已成功完成。提供方：OpenAI（${extraction.document.model ?? 'configured model'}）。`
+      : `AI extraction completed successfully. Provider: OpenAI (${extraction.document.model ?? 'configured model'}).`;
+  }
+  const reason = extraction.fallbackReason ?? 'openai_request_failed';
+  return language === 'zh'
+    ? `已使用确定性备用解析器。原因：${reason}。`
+    : `Deterministic fallback used. Reason: ${reason}.`;
+}
+
 function cleanNumber(value: unknown): number {
   const number = Number(value ?? 0);
   return Number.isFinite(number) ? number : 0;
@@ -817,7 +829,7 @@ export default function RentalCommandCentre() {
       setUploadedDocument(payload.document);
       setImportErrors({});
       setImportState('review');
-      setNotice({ tone: parsed.document.extractionStatus === 'unreadable' ? 'warning' : 'success', message: parsed.document.extractionStatus === 'unreadable' ? t.scannedWarning : t.extractionReady });
+      setNotice({ tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) });
     } catch (error) {
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
@@ -987,7 +999,7 @@ export default function RentalCommandCentre() {
                     </div>
                     <ConfidencePill confidence={extraction.document.extractionConfidence} language={language} />
                   </div>
-                  {!extraction.advancedAiConfigured && <div className="notice warning">{t.advancedAiUnavailable}</div>}
+                  <div className={`notice ${extraction.fallbackUsed ? 'warning' : 'success'}`}>{extractionProviderMessage(extraction, language)}</div>
                   {extraction.document.extractionStatus === 'unreadable' && <div className="notice warning">{t.scannedWarning}</div>}
                   {uploadedDocument && (
                     <div className="document-meta-grid">

@@ -1,6 +1,6 @@
 import { displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
 import { applyRiskEngine, type TenancyLegalIntelligence } from '../ai/extractTenancy';
-import type { Confidence, ExtractedField, TenancyExtraction } from './parser';
+import type { Confidence, ExtractedField, TenancyExtraction, TenancyExtractionFallbackReason } from './parser';
 
 const empty = (): ExtractedField => ({ value: '', confidence: 'low' });
 
@@ -8,7 +8,8 @@ export function extractTenancyDeterministically(
   rawText: string,
   originalFilename: string,
   mimeType: string,
-  fallbackReason: string
+  fallbackReason: TenancyExtractionFallbackReason,
+  advancedAiConfigured = false
 ): TenancyExtraction {
   const text = rawText.replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   const first = (patterns: RegExp[], confidence: Confidence = 'medium'): ExtractedField => {
@@ -73,12 +74,15 @@ export function extractTenancyDeterministically(
       usedOcr: false,
       pageCount: null,
       chunkCount: 1,
-      model: 'deterministic-fallback',
+      model: null,
       fallbackReason
     },
     rawText: text,
     summary: text.length < 80 ? 'The document did not contain enough readable text for reliable extraction.' : `Deterministic fallback extracted ${detected} tenancy fields. Fields below 80% confidence require review.`,
-    advancedAiConfigured: false,
+    advancedAiConfigured,
+    provider: 'deterministic',
+    fallbackUsed: true,
+    fallbackReason,
     legalIntelligence
   };
 }
