@@ -3,6 +3,7 @@ import { extractDocumentText } from '../documents/extractText';
 import { OpenAiClientError, requestStructuredOpenAi } from './openAiClient';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
 import { buildLegalIntelligence, normalizeClause, type LegalClause, type LegalIntelligenceResult } from '../legal-intelligence/core';
+import { logExtractionDiagnostic } from './extractionDiagnostics';
 
 export type LegalParty = {
   name: string;
@@ -282,7 +283,11 @@ Confidence is a number from 0 to 1 representing the reliability and completeness
 Return only the requested JSON schema.`;
 
 export class TenancyExtractionError extends Error {
-  constructor(public readonly code: string, message = code) {
+  constructor(
+    public readonly code: string,
+    message = code,
+    public readonly stage: 'pdf' | 'ocr' | 'openai' | 'parser' | 'mapping' = 'parser'
+  ) {
     super(message);
     this.name = 'TenancyExtractionError';
   }
@@ -301,7 +306,7 @@ export async function extractTenancyDocument(
 ): Promise<TenancyProcessingResult> {
   const textResult = await extractDocumentText(input, options.ocrProvider);
   if (textResult.status !== 'completed' || !textResult.text.trim()) {
-    throw new TenancyExtractionError(textResult.error || 'document-text-extraction-failed');
+    throw documentTextError(textResult);
   }
 
   const result = await extractTenancyText(textResult.text, input.filename, options);
@@ -318,10 +323,16 @@ export async function extractTenancyText(
   options: ExtractTenancyOptions = {}
 ): Promise<Omit<TenancyProcessingResult, 'pageCount' | 'usedOcr'>> {
   const normalizedText = normalizeDocumentText(rawText);
-  if (normalizedText.length < 80) throw new TenancyExtractionError('text_extraction_failed');
+  if (normalizedText.length < 80) {
+    throw new TenancyExtractionError(
+      'text_extraction_failed',
+      'The document contained fewer than 80 readable characters after text extraction.',
+      'parser'
+    );
+  }
 
   const apiKey = options.apiKey?.trim() || getOpenAiApiKey();
-  if (!apiKey) throw new TenancyExtractionError('openai_not_configured');
+  if (!apiKey) throw new TenancyExtractionError('openai_not_configured', 'OPENAI_API_KEY is not configured for the server runtime.', 'openai');
 
   const model = options.model?.trim() || getOpenAiConfiguration().tenancyModel;
   const chunks = splitTenancyDocument(normalizedText, options.maxChunkCharacters);
@@ -344,8 +355,20 @@ export async function extractTenancyText(
       fetcher: options.fetcher,
       prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
     });
-  const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
-  const extraction = applyRiskEngine(normalized, normalizedText);
+  let extraction: TenancyLegalIntelligence;
+  try {
+    const normalized = validateFieldEvidence(normalizeExtraction(reconciled), normalizedText);
+    extraction = applyRiskEngine(normalized, normalizedText);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The extracted JSON could not be mapped to the tenancy record.';
+    logExtractionDiagnostic('mapping_failed', { stage: 'mapping', errorMessage: message.slice(0, 500) });
+    throw new TenancyExtractionError('mapping_failed', message, 'mapping');
+  }
+
+  logExtractionDiagnostic('mapping_completed', {
+    stage: 'mapping',
+    mappedObjectPreview: JSON.stringify(extraction).slice(0, 500)
+  });
 
   return {
     extraction,
@@ -480,9 +503,17 @@ async function requestStructuredExtraction(input: {
       validate: validateExtractionShape
     });
   } catch (error) {
-    if (error instanceof OpenAiClientError) throw new TenancyExtractionError(error.code);
+    if (error instanceof OpenAiClientError) throw new TenancyExtractionError(error.code, error.message, 'openai');
     throw error;
   }
+}
+
+function documentTextError(textResult: Awaited<ReturnType<typeof extractDocumentText>>): TenancyExtractionError {
+  const stage = textResult.failureStage ?? (textResult.usedOcr || /ocr/i.test(textResult.error) ? 'ocr' : 'parser');
+  const code = textResult.error || 'document-text-extraction-failed';
+  const message = textResult.errorDetail
+    ?? (stage === 'ocr' ? `OCR failed: ${code}.` : `Document text extraction failed: ${code}.`);
+  return new TenancyExtractionError(code, message, stage);
 }
 
 function validateExtractionShape(value: unknown): TenancyLegalIntelligence {

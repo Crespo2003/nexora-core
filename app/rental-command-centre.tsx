@@ -201,8 +201,11 @@ function isMissingTableError(error: unknown): boolean {
 function userError(error: unknown, language: Language): string {
   const t = getTranslations(language);
   if (isMissingTableError(error)) return t.notices.tablesMissing;
-  if (error instanceof Error && (error.message === 'non-json-api-response' || error.message === 'invalid-json-api-response')) {
-    return language === 'zh' ? '提取服务返回了无效响应。请稍后重试。' : 'The extraction service returned an invalid response. Please try again.';
+  if (error instanceof Error && error.message === 'non-json-api-response') {
+    return language === 'zh' ? '上传端点未返回 JSON 响应。请检查服务器日志。' : 'The upload endpoint did not return JSON. Check the server logs.';
+  }
+  if (error instanceof Error && error.message === 'invalid-json-api-response') {
+    return language === 'zh' ? '上传端点返回了格式错误的 JSON。请检查服务器日志。' : 'The upload endpoint returned malformed JSON. Check the server logs.';
   }
   if (typeof error === 'object' && error && 'message' in error) return String(error.message);
   if (error instanceof Error) return error.message;
@@ -879,11 +882,16 @@ export default function RentalCommandCentre() {
       setImportState('parsing');
       const payload = await readJsonApiResponse(response) as {
         error?: unknown;
+        stage?: unknown;
         documentId?: unknown;
         extraction?: TenancyExtraction;
         document?: UploadedDocument;
       };
-      if (!response.ok || !payload.extraction || !payload.document) throw new Error(apiErrorMessage(payload.error ?? t.errors.parseFailed, language));
+      if (!response.ok || !payload.extraction || !payload.document) {
+        const stage = typeof payload.stage === 'string' ? payload.stage : '';
+        const message = apiErrorMessage(payload.error ?? t.errors.parseFailed, language);
+        throw new Error(stage ? `[${stage}] ${message}` : message);
+      }
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
       const mapped = mapTenancyExtractionToForm(parsed, {
@@ -903,7 +911,7 @@ export default function RentalCommandCentre() {
     } catch (error) {
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
-      setNotice({ tone: 'error', message: `${t.errors.parseFailed} ${userError(error, language)}` });
+      setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
       setOperationId(null);
     }

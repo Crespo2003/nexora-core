@@ -2,6 +2,7 @@ import { isoToDisplayDate } from '../dates/formatDate';
 import { extractDocumentText } from '../documents/extractText';
 import {
   extractTenancyText,
+  TenancyExtractionError,
   type TenancyDocumentInput,
   type TenancyLegalIntelligence,
   type TenancyProcessingResult
@@ -119,7 +120,11 @@ export async function extractTenancyFile(
 ): Promise<TenancyExtraction> {
   const text = await extractDocumentText(input, options.ocrProvider);
   if (text.status !== 'completed' || !text.text.trim()) {
-    throw new Error(text.usedOcr || /ocr/i.test(text.error) ? 'ocr_failed' : 'text_extraction_failed');
+    const stage = text.failureStage ?? (text.usedOcr || /ocr/i.test(text.error) ? 'ocr' : 'parser');
+    const code = text.usedOcr || /ocr/i.test(text.error) ? 'ocr_failed' : 'text_extraction_failed';
+    const message = text.errorDetail
+      ?? (stage === 'ocr' ? `OCR failed: ${text.error || 'no readable text was returned.'}` : `Document text extraction failed: ${text.error || 'no readable text was returned.'}`);
+    throw new TenancyExtractionError(code, message, stage);
   }
   const aiConfigured = Boolean(options.apiKey?.trim()) || getOpenAiConfiguration().configured;
   try {
@@ -216,7 +221,7 @@ function toLegacyExtraction(
 }
 
 function extractionErrorCode(error: unknown): TenancyExtractionFallbackReason {
-  const code = error instanceof Error ? error.message : '';
+  const code = error instanceof TenancyExtractionError ? error.code : error instanceof Error ? error.message : '';
   if (code === 'openai_not_configured' || code === 'openai-not-configured') return 'openai_not_configured';
   if (code === 'openai_authentication_failed') return 'openai_authentication_failed';
   if (code === 'openai_permission_denied') return 'openai_permission_denied';

@@ -5,6 +5,7 @@ import { validateFileSignature, workspaceStoragePath } from '../../../../lib/doc
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { getOpenAiConfiguration } from '../../../../lib/ai/openAiConfig';
 import { logExtractionDiagnostic, logExtractionFailure } from '../../../../lib/ai/extractionDiagnostics';
+import { TenancyExtractionError } from '../../../../lib/ai/extractTenancy';
 
 const maxUploadBytes = 10 * 1024 * 1024;
 const storageBucket = 'real-estate-documents';
@@ -42,6 +43,27 @@ function safeErrorDetails(error: unknown) {
   };
 }
 
+function extractionFailureDetails(error: unknown): {
+  stage: 'pdf' | 'ocr' | 'openai' | 'parser' | 'mapping';
+  error: string;
+  code: string;
+} {
+  if (error instanceof TenancyExtractionError) {
+    return {
+      stage: error.stage,
+      error: safeErrorDetails(error).message,
+      code: error.code
+    };
+  }
+
+  const details = safeErrorDetails(error);
+  return {
+    stage: 'parser',
+    error: details.message === 'unknown-error' ? 'The extraction pipeline failed before it could produce a readable tenancy record.' : details.message,
+    code: details.code ?? 'extraction_pipeline_failed'
+  };
+}
+
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
   const base = filename.replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -67,6 +89,13 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) {
       return uploadError('No file uploaded.', 'upload', 400);
     }
+
+    logExtractionDiagnostic('file_received', {
+      stage: 'upload',
+      filename: file.name,
+      fileType: file.type || 'unknown',
+      fileSize: file.size
+    });
 
     if (file.size > maxUploadBytes) {
       return uploadError('File is too large.', 'upload', 400);
@@ -126,7 +155,7 @@ export async function POST(request: Request) {
     try {
       extraction = await extractTenancyFile({ buffer, filename: file.name, mimeType });
     } catch (error) {
-      const technicalReference = getApiErrorMessage(error);
+      const failure = extractionFailureDetails(error);
       const sanitizedFilename = storagePath.split('/').pop() ?? file.name;
       const bundle = await supabase.rpc('sprint_005_create_document_bundle', {
         p_workspace_id: workspaceId,
@@ -142,7 +171,7 @@ export async function POST(request: Request) {
           processingStatus: 'extraction_failed',
           documentHash,
           processingAttempts: 1,
-          processingError: technicalReference,
+          processingError: `${failure.stage}: ${failure.error}`,
           rawText: '',
           extractedJson: {},
           confidenceJson: {},
@@ -153,16 +182,21 @@ export async function POST(request: Request) {
       if (bundle.error) throw bundle.error;
       uploadedPath = null;
       const saved = bundle.data as { document: { id: string }; extraction: { id: string } };
-      logExtractionFailure('extraction_failed', technicalReference);
-      logExtractionDiagnostic('document_persistence', { persisted: true, fallbackReason: technicalReference });
-      return uploadError('document-extraction-failed', 'extraction', 422, {
+      logExtractionFailure(`${failure.stage}_failed`, failure.error);
+      logExtractionDiagnostic('extraction_failed', {
+        stage: failure.stage,
+        errorMessage: failure.error,
+        fallbackReason: failure.code
+      });
+      logExtractionDiagnostic('document_persistence', { persisted: true, fallbackReason: failure.code });
+      return uploadError(failure.error, failure.stage, 422, {
         documentId: saved.document.id,
         extractionId: saved.extraction.id, retryAllowed: true, rollbackStatus: 'document-preserved',
         message: {
           en: 'The document was saved, but extraction failed. Retry it from Document Centre.',
           zh: '文件已保存，但提取失败。请从文件中心重试。'
         },
-        technicalReference
+        technicalReference: failure.code
       });
     }
 
