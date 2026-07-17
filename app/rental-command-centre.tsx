@@ -11,6 +11,7 @@ import {
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
+import { readJsonApiResponse } from '../lib/http/jsonResponse';
 import { LegalIntelligencePanel } from './legal-intelligence-panel';
 import {
   editableTenancyFormFields,
@@ -200,6 +201,9 @@ function isMissingTableError(error: unknown): boolean {
 function userError(error: unknown, language: Language): string {
   const t = getTranslations(language);
   if (isMissingTableError(error)) return t.notices.tablesMissing;
+  if (error instanceof Error && (error.message === 'non-json-api-response' || error.message === 'invalid-json-api-response')) {
+    return language === 'zh' ? '提取服务返回了无效响应。请稍后重试。' : 'The extraction service returned an invalid response. Please try again.';
+  }
   if (typeof error === 'object' && error && 'message' in error) return String(error.message);
   if (error instanceof Error) return error.message;
   return t.errors.unknown;
@@ -873,8 +877,13 @@ export default function RentalCommandCentre() {
       body.append('file', importFile);
       const response = await fetch('/api/tenancy-import/upload', { method: 'POST', body });
       setImportState('parsing');
-      const payload = await response.json();
-      if (!response.ok || !payload.extraction) throw new Error(apiErrorMessage(payload.error ?? t.errors.parseFailed, language));
+      const payload = await readJsonApiResponse(response) as {
+        error?: unknown;
+        documentId?: unknown;
+        extraction?: TenancyExtraction;
+        document?: UploadedDocument;
+      };
+      if (!response.ok || !payload.extraction || !payload.document) throw new Error(apiErrorMessage(payload.error ?? t.errors.parseFailed, language));
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
       const mapped = mapTenancyExtractionToForm(parsed, {
@@ -956,7 +965,14 @@ export default function RentalCommandCentre() {
           }
         })
       });
-      const payload = await response.json();
+      const payload = await readJsonApiResponse(response) as {
+        error?: unknown;
+        stage?: unknown;
+        tenancy: Record<string, unknown>;
+        document: Record<string, unknown>;
+        extraction: Record<string, unknown>;
+        collection: Record<string, unknown>;
+      };
       if (!response.ok) {
         failedStage = String(payload.stage ?? t.importIntoNexora);
         setImportFailedStage(failedStage);

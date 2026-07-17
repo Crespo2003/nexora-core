@@ -33,3 +33,17 @@ export function logExtractionFailure(event: string, reason: string): void {
 export function logOpenAiDiagnostic(event: string, details: DiagnosticDetails = {}): void {
   logExtractionDiagnostic(`openai_${event}`, details);
 }
+
+export function logOpenAiError(
+  event: string,
+  error: unknown,
+  details: DiagnosticDetails = {}
+): void {
+  if (typeof window !== 'undefined') return;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown-openai-error';
+  console.error('[tenancy-extraction]', `openai_${event}`, {
+    ...Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined)),
+    errorName: error instanceof Error ? error.name : undefined,
+    errorMessage: message.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 500)
+  });
+}

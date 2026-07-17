@@ -1,6 +1,6 @@
 import OpenAI, { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import { getOpenAiApiKey, getOpenAiConfiguration } from './openAiConfig';
-import { logOpenAiDiagnostic } from './extractionDiagnostics';
+import { logOpenAiDiagnostic, logOpenAiError } from './extractionDiagnostics';
 
 export type OpenAiFailureCode =
   | 'openai_not_configured'
@@ -121,6 +121,13 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
       }
     } catch (error) {
       const normalized = classifyOpenAiError(error);
+      logOpenAiError('request_error', error, {
+        attempt,
+        tenancyModel: model,
+        fallbackReason: normalized.code,
+        statusCode: normalized.status,
+        requestId: normalized.requestId
+      });
       logOpenAiDiagnostic('request_failed', {
         attempt,
         tenancyModel: model,
