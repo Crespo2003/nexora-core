@@ -14,7 +14,11 @@ export type ExtractedContactCandidate = {
   companyNumber: string;
   renNumber: string;
   phone: string;
+  mobile: string;
+  officePhone: string;
+  additionalPhones: string[];
   email: string;
+  additionalEmails: string[];
   correspondenceAddress: string;
   sourcePage: number | null;
   sourceExcerpt: string;
@@ -54,8 +58,9 @@ export function extractedTenancyContacts(value: unknown): ExtractedContactCandid
     const party = record(partyValue);
     return candidate({
       role, represents: role, name: party.name, company: party.company, identification: party.ic_passport ?? party.identification,
-      identification_type: party.identification_type, company_number: party.company_number, ren_number: party.ren_number, phone: party.phone, email: party.email,
-      correspondence_address: party.correspondence_address, source_page: null, source_excerpt: '', confidence: root.confidence
+      identification_type: party.identification_type, company_number: party.company_number, ren_number: party.ren_number,
+      phone: party.phone, mobile: party.mobile, office_phone: party.office_phone, additional_phones: party.additional_phones, email: party.email,
+      additional_emails: party.additional_emails, correspondence_address: party.correspondence_address, source_page: null, source_excerpt: '', confidence: root.confidence
     });
   };
   const values = [fromParty('tenant', root.tenant), fromParty('landlord', root.landlord)];
@@ -108,16 +113,57 @@ function candidate(value: unknown): ExtractedContactCandidate | null {
   if (!validRoles.has(role)) return null;
   const representsValue = text(source.represents).toLowerCase() as Representation;
   const phone = normalizePhone(text(source.phone));
+  const mobileSource = text(source.mobile);
+  const mobile = normalizePhone(mobileSource);
+  const officeSource = text(source.office_phone);
+  const officePhone = normalizePhone(officeSource);
+  const additionalPhones = uniquePhones(
+    (Array.isArray(source.additional_phones) ? source.additional_phones : []).map((item) => text(item)),
+    [phone.normalized, mobile.normalized, officePhone.normalized]
+  );
+  const email = text(source.email).toLowerCase();
+  const additionalEmails = uniqueEmails(
+    (Array.isArray(source.additional_emails) ? source.additional_emails : []).map((item) => text(item).toLowerCase()),
+    [email]
+  );
   const result: ExtractedContactCandidate = {
     role, represents: validRepresentation.has(representsValue) ? representsValue : 'unknown', name: normalizePersonName(source.name),
     company: text(source.company), identification: normalizeIdentification(source.identification ?? source.ic_passport),
     identificationType: text(source.identification_type), companyNumber: normalizeIdentification(source.company_number),
     renNumber: normalizeIdentification(source.ren_number),
-    phone: phone.normalized || text(source.phone), email: text(source.email).toLowerCase(), correspondenceAddress: text(source.correspondence_address),
+    phone: phone.normalized || mobile.normalized || text(source.phone), mobile: mobile.normalized || mobileSource,
+    officePhone: officePhone.normalized || officeSource, additionalPhones,
+    email, additionalEmails, correspondenceAddress: text(source.correspondence_address),
     sourcePage: Number.isInteger(source.source_page) && Number(source.source_page) > 0 ? Number(source.source_page) : null,
     sourceExcerpt: text(source.source_excerpt).slice(0, 500), confidence: normalizeConfidence(source.confidence)
   };
-  return result.name || result.company || result.identification || result.companyNumber || result.phone || result.email ? result : null;
+  return result.name || result.company || result.identification || result.companyNumber || result.phone || result.mobile || result.officePhone || result.email ? result : null;
+}
+
+function uniquePhones(values: string[], exclude: string[]): string[] {
+  const excluded = new Set(exclude.map((item) => item.replace(/\D/g, '')).filter(Boolean));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of values) {
+    const normalized = normalizePhone(raw).normalized || raw;
+    const digits = normalized.replace(/\D/g, '');
+    if (!digits || excluded.has(digits) || seen.has(digits)) continue;
+    seen.add(digits);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function uniqueEmails(values: string[], exclude: string[]): string[] {
+  const excluded = new Set(exclude.filter(Boolean));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const email of values) {
+    if (!email || excluded.has(email) || seen.has(email)) continue;
+    seen.add(email);
+    result.push(email);
+  }
+  return result;
 }
 
 async function findOrCreateContact(supabase: ContactSyncClient, workspaceId: string, item: ExtractedContactCandidate): Promise<string> {

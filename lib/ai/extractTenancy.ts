@@ -20,7 +20,11 @@ export type LegalParty = {
   identification_type?: string;
   company_number?: string;
   phone: string;
+  mobile?: string;
+  office_phone?: string;
+  additional_phones?: string[];
   email: string;
+  additional_emails?: string[];
   correspondence_address?: string;
 };
 
@@ -197,8 +201,8 @@ type ExtractTenancyOptions = {
 };
 
 const confidencePaths = [
-  'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.company_number', 'tenant.phone', 'tenant.email', 'tenant.correspondence_address',
-  'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.company_number', 'landlord.phone', 'landlord.email', 'landlord.correspondence_address',
+  'document_type', 'tenant.name', 'tenant.company', 'tenant.ic_passport', 'tenant.company_number', 'tenant.phone', 'tenant.mobile', 'tenant.office_phone', 'tenant.email', 'tenant.correspondence_address',
+  'landlord.name', 'landlord.company', 'landlord.ic_passport', 'landlord.company_number', 'landlord.phone', 'landlord.mobile', 'landlord.office_phone', 'landlord.email', 'landlord.correspondence_address',
   'property.name', 'property.unit', 'property.address', 'property.street', 'property.postcode', 'property.city', 'property.state', 'property.country', 'property.type', 'property.build_up', 'property.land_area', 'property.car_parks',
   'financial.monthly_rental', 'financial.security_deposit', 'financial.utility_deposit', 'financial.access_card_deposit', 'financial.car_park_deposit', 'financial.holding_deposit', 'financial.booking_fee', 'financial.stamp_duty',
   'tenancy.commencement_date', 'tenancy.expiry_date', 'tenancy.renewal_option', 'tenancy.renewal_period', 'tenancy.automatic_renewal', 'tenancy.notice_period', 'tenancy.payment_due_day',
@@ -219,12 +223,13 @@ Classify the premises as Residential, Commercial, Industrial, Office, Retail, Bu
 Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM symbol or commas. Do not replace an explicit written amount with a calculated amount.
 Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is absent or ambiguous.
 Use empty strings, null money values, and empty arrays for facts that are not stated.
-Extract tenant, landlord, witness, agent, and law-firm contacts into contacts from every page, signature block, schedule, annexure, agency stamp, payment instruction, and contact-information block. Include every stated name, IC/passport, company registration number, REN number, phone, email, correspondence address, stated role, source page, concise source excerpt, and confidence. Keep the person/company identity value separate from its label. Never treat an NRIC, passport, bank account, date, unit, or page number as a phone number. A witness remains a witness unless an REN number, agency name, negotiator title, agent wording, agency stamp, or matching agent contact evidence supports an agent role.
+Extract tenant, landlord, witness, agent, and law-firm contacts into contacts from every page, signature block, schedule, annexure, agency stamp, payment instruction, and contact-information block. Include every stated name, IC/passport, company registration number, REN number, correspondence address, stated role, source page, concise source excerpt, and confidence. Keep the person/company identity value separate from its label. A witness remains a witness unless an REN number, agency name, negotiator title, agent wording, agency stamp, or matching agent contact evidence supports an agent role.
+For every party and contact, capture phone numbers precisely: mobile in mobile, a landline or office number in office_phone, and any further numbers found for that same person in additional_phones. Populate phone with whichever number the agreement presents as the primary contact number for that person. Capture every email address for that person: the primary one in email and any further addresses in additional_emails. Never treat an NRIC, passport, bank account number, date, unit number, or page number as a phone number, and never invent a phone number or email address that is not written in the document.
 For tenant and landlord, extract identification_type, company_number, and correspondence_address as well as the core particulars.
 Split the property into name, unit_number, street, postcode, city, state, country, and address. The address may retain the complete source address; never invent an address component.
 For security, utility, access-card, car-park, key, renovation, holding deposits, booking fee and other deposits, first preserve an explicit monetary amount. When no amount is written but the agreement explicitly gives a rental multiple, calculate it from monthly_rental. Recognize two (2) months rental, two months' rental, one month rental, half month rental, 0.5 month rental, equal to, and equivalent to. Do not calculate when the agreement does not clearly state a rental multiple. Populate deposit_details for every deposit: amount (or null), basis, rental_multiple (or null), source_page, source_excerpt, confidence, and requires_review. Explicit amounts win; if they conflict with a stated rental multiple, preserve the amount and set requires_review true. Use null for unknown values and zero only when the agreement explicitly states no deposit is required.
 Separate notice_details into the main non-renewal or ordinary termination notice period and other notice types: early_termination, default_cure, viewing, rent_review, renewal_exercise, and vacant_possession. Never place viewing, breach-cure, or renewal-exercise notice in the primary Notice Period. If no valid non-renewal or ordinary termination notice exists, leave primary_notice_period and tenancy.notice_period blank.
-Extract payment method, bank name, account number, account holder, rental due day, late-payment interest, grace period, renewal period, automatic renewal, holding deposit and booking fee.
+Extract payment method, bank name, account number, account holder, the rental due day of each month exactly as stated (a number from 1 to 31, or the stated wording if it is not a fixed day), the late-payment interest rate or charge exactly as stated, grace period, renewal period, automatic renewal, holding deposit and booking fee. Never invent a rental due day or late-payment interest rate; leave the field blank when the agreement does not state one.
 For utilities record who pays or whether each is included/excluded for electricity/TNB, water, IWK, internet/WiFi, air-conditioning, maintenance fee, quit rent, and assessment.
 For parking record bays, bay numbers, access cards, remote controls, and keys. Extract a structured inventory item list for furnished items such as beds, wardrobes, appliances, furniture, curtains, and water heaters.
 Set every clause_coverage boolean to true only when a material clause is present. Cover pets, subletting, Airbnb/short stays, illegal business, termination, default, force majeure, viewing rights, landlord access, deposit refund, repairs, maintenance, and insurance.
@@ -235,7 +240,7 @@ Every risk must include a stable snake_case code, severity, evidence-based reaso
 Return the canonical schema exactly. It has document, confidence, tenant, landlord, contacts, property, financial, deposit_details, tenancy, notice_details, payment, utilities, parking, inventory, clause_coverage, legal, clauses, risks, and warnings. Do not add fields.
 Each risk must include a stable snake_case code, severity, category, evidence-based reason, and practical recommendation.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
-Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
+Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction. Score confidence per contact and per notable field independently: use 0.9 to 1 only when the value is stated in clear, unambiguous wording with a direct source excerpt; use 0.5 to 0.89 when the value is present but requires interpretation, appears only once, or is stated in an unusual format; use below 0.5 when the value is inferred from weak or indirect evidence. Do not assign a high confidence value to a field that is blank or was not found in the document.
 Return only the requested JSON schema.`;
 
 export class TenancyExtractionError extends Error {
@@ -538,13 +543,46 @@ function enrichContactsFromDocument(source: TenancyLegalIntelligence, rawText: s
   const enrichParty = (party: LegalParty, role: 'tenant' | 'landlord'): LegalParty => {
     const details = findPartyContactDetails(rawText, role);
     const result = { ...party };
+    if (!result.mobile && details.mobile) {
+      result.mobile = details.mobile.value;
+      if (!result.phone) result.phone = details.mobile.value;
+      evidence[`${role}.mobile`] = { value: details.mobile.value, confidence: 92, source_page: details.mobile.page, source_excerpt: details.mobile.excerpt };
+    }
+    if (!result.office_phone && details.officePhone) {
+      result.office_phone = details.officePhone.value;
+      if (!result.phone) result.phone = details.officePhone.value;
+      evidence[`${role}.office_phone`] = { value: details.officePhone.value, confidence: 90, source_page: details.officePhone.page, source_excerpt: details.officePhone.excerpt };
+    }
     if (!result.phone && details.phone) {
       result.phone = details.phone.value;
       evidence[`${role}.phone`] = { value: details.phone.value, confidence: 92, source_page: details.phone.page, source_excerpt: details.phone.excerpt };
     }
+    if (details.additionalPhones.length) {
+      const excluded = new Set([result.phone, result.mobile, result.office_phone].map((value) => value.replace(/\D/g, '')).filter(Boolean));
+      const seen = new Set<string>();
+      const merged = [...result.additional_phones];
+      for (const candidate of details.additionalPhones) {
+        const digits = candidate.replace(/\D/g, '');
+        if (excluded.has(digits) || seen.has(digits)) continue;
+        seen.add(digits);
+        merged.push(candidate);
+      }
+      result.additional_phones = merged;
+    }
     if (!result.email && details.email) {
       result.email = details.email.value;
       evidence[`${role}.email`] = { value: details.email.value, confidence: 96, source_page: details.email.page, source_excerpt: details.email.excerpt };
+    }
+    if (details.additionalEmails.length) {
+      const excluded = new Set([result.email]);
+      const seen = new Set<string>();
+      const merged = [...result.additional_emails];
+      for (const candidate of details.additionalEmails) {
+        if (excluded.has(candidate) || seen.has(candidate)) continue;
+        seen.add(candidate);
+        merged.push(candidate);
+      }
+      result.additional_emails = merged;
     }
     return result;
   };
@@ -558,25 +596,45 @@ function enrichContactsFromDocument(source: TenancyLegalIntelligence, rawText: s
 
 function findPartyContactDetails(rawText: string, role: 'tenant' | 'landlord'): {
   phone?: { value: string; page: number | null; excerpt: string };
+  mobile?: { value: string; page: number | null; excerpt: string };
+  officePhone?: { value: string; page: number | null; excerpt: string };
   email?: { value: string; page: number | null; excerpt: string };
+  additionalPhones: string[];
+  additionalEmails: string[];
 } {
   const rolePattern = role === 'tenant' ? '(?:tenant|lessee|penyewa)' : '(?:landlord|owner|lessor|tuan\\s*rumah)';
   const start = new RegExp(`(?:^|\\n)\\s*${rolePattern}\\b[\\s\\S]{0,650}`, 'ig');
   for (const match of rawText.matchAll(start)) {
     const block = match[0].replace(/^\s+/, '').split(/\n\s*(?:tenant|lessee|landlord|owner|lessor|penyewa|tuan\s*rumah)\b/i)[0];
-    const emailMatch = block.match(/(?:e-?mail)\s*(?:address)?\s*[:#-]?\s*([^\s,;]+@[^\s,;]+)/i)
-      ?? block.match(/\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/i);
-    const phoneMatch = block.match(/(?:phone|telephone|tel|mobile|contact)\s*(?:no\.?|number)?\s*[:#-]?\s*([+0-9][0-9\s()-]{7,18})/i);
-    const phone = normalizeMalaysianPhone(phoneMatch?.[1] ?? '');
-    const email = normalizeEmail(emailMatch?.[1] ?? '');
-    if (!phone && !email) continue;
+    const emailMatches = [...block.matchAll(/\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/ig)].map((item) => normalizeEmail(item[1] ?? ''));
+    const uniqueEmails = uniqueStrings(emailMatches.filter(Boolean));
+    const phoneCandidates = [...block.matchAll(/(mobile|h\/?p|handphone|cell|office|telephone|tel|phone|contact)?\s*(?:no\.?|number)?\s*[:#-]?\s*([+0-9][0-9\s()-]{7,18})/ig)]
+      .map((item) => ({ label: (item[1] ?? '').toLowerCase(), value: normalizeMalaysianPhone(item[2] ?? '') }))
+      .filter((item) => item.value);
+    const mobileMatch = phoneCandidates.find((item) => /mobile|h\/?p|handphone|cell/.test(item.label))
+      ?? phoneCandidates.find((item) => /^\+601/.test(item.value));
+    const officeMatch = phoneCandidates.find((item) => /office|telephone|tel\b/.test(item.label) && item !== mobileMatch)
+      ?? phoneCandidates.find((item) => item !== mobileMatch && !/^\+601/.test(item.value));
+    const genericMatch = phoneCandidates.find((item) => item !== mobileMatch && item !== officeMatch);
+    const seenDigits = new Set<string>();
+    const additionalPhones = phoneCandidates.flatMap((item) => {
+      const digits = item.value.replace(/\D/g, '');
+      if (item === mobileMatch || item === officeMatch || seenDigits.has(digits)) return [];
+      seenDigits.add(digits);
+      return [item.value];
+    });
+    if (!mobileMatch && !officeMatch && !uniqueEmails.length) continue;
     const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(block.replace(/\s+/g, ' ').trim()), 'i'));
     return {
-      ...(phone ? { phone: { value: phone, page: source.page, excerpt: source.excerpt } } : {}),
-      ...(email ? { email: { value: email, page: source.page, excerpt: source.excerpt } } : {})
+      ...(mobileMatch ? { mobile: { value: mobileMatch.value, page: source.page, excerpt: source.excerpt } } : {}),
+      ...(officeMatch ? { officePhone: { value: officeMatch.value, page: source.page, excerpt: source.excerpt } } : {}),
+      ...(!mobileMatch && !officeMatch && genericMatch ? { phone: { value: genericMatch.value, page: source.page, excerpt: source.excerpt } } : {}),
+      ...(uniqueEmails[0] ? { email: { value: uniqueEmails[0], page: source.page, excerpt: source.excerpt } } : {}),
+      additionalPhones,
+      additionalEmails: uniqueEmails.slice(1)
     };
   }
-  return {};
+  return { additionalPhones: [], additionalEmails: [] };
 }
 
 export function applyRiskEngine(
@@ -648,7 +706,8 @@ export function applyRiskEngine(
   if (!extraction.tenancy.expiry_date) warnings.push('Expiry date was not reliably detected.');
   if (extraction.confidence < 0.75) warnings.push('Overall extraction confidence is below 75%; verify against the source document.');
 
-  const completed = { ...extraction, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
+  const overallConfidence = computeOverallConfidence(extraction.field_confidence, extraction.confidence);
+  const completed = { ...extraction, confidence: overallConfidence, risks: uniqueRisks(risks), warnings: uniqueStrings(warnings) };
   return attachLegalIntelligence(completed, rawText);
 }
 
@@ -774,7 +833,11 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
   return extraction;
 }
 
-function mapParty(source: { name: string; company: string; identification: string; identification_type: string; company_number: string; phone: string; email: string; correspondence_address: string }): LegalParty {
+function mapParty(source: {
+  name: string; company: string; identification: string; identification_type: string; company_number: string;
+  phone: string; mobile?: string; office_phone?: string; additional_phones?: string[];
+  email: string; additional_emails?: string[]; correspondence_address: string
+}): LegalParty {
   return {
     name: normalizePersonName(source.name),
     company: source.company,
@@ -782,7 +845,11 @@ function mapParty(source: { name: string; company: string; identification: strin
     identification_type: source.identification_type,
     company_number: normalizeIdentification(source.company_number),
     phone: source.phone,
+    mobile: source.mobile ?? '',
+    office_phone: source.office_phone ?? '',
+    additional_phones: Array.isArray(source.additional_phones) ? source.additional_phones : [],
     email: source.email,
+    additional_emails: Array.isArray(source.additional_emails) ? source.additional_emails : [],
     correspondence_address: source.correspondence_address
   };
 }
@@ -794,11 +861,48 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     const amount = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
     return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : null;
   };
-  const party = (value: Partial<LegalParty> | undefined): LegalParty => ({
-    name: normalizePersonName(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
-    identification_type: text(value?.identification_type), company_number: normalizeIdentification(value?.company_number).replace(/\s+/g, ''),
-    phone: normalizeMalaysianPhone(text(value?.phone)), email: normalizeEmail(text(value?.email)), correspondence_address: text(value?.correspondence_address)
-  });
+  const phoneArray = (value: unknown, exclude: string[]): string[] => {
+    if (!Array.isArray(value)) return [];
+    const excluded = new Set(exclude.map((item) => item.replace(/\D/g, '')).filter(Boolean));
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const item of value) {
+      const normalized = normalizeMalaysianPhone(text(item));
+      if (!normalized) continue;
+      const digits = normalized.replace(/\D/g, '');
+      if (excluded.has(digits) || seen.has(digits)) continue;
+      seen.add(digits);
+      result.push(normalized);
+    }
+    return result;
+  };
+  const emailArray = (value: unknown, exclude: string[]): string[] => {
+    if (!Array.isArray(value)) return [];
+    const excluded = new Set(exclude);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const item of value) {
+      const normalized = normalizeEmail(text(item));
+      if (!normalized || excluded.has(normalized) || seen.has(normalized)) continue;
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    return result;
+  };
+  const party = (value: (Partial<LegalParty> & { additional_phones?: unknown; additional_emails?: unknown }) | undefined): LegalParty => {
+    const phone = normalizeMalaysianPhone(text(value?.phone));
+    const mobile = normalizeMalaysianPhone(text(value?.mobile)) || (phone && /^\+601/.test(phone) ? phone : '');
+    const officePhone = normalizeMalaysianPhone(text(value?.office_phone));
+    const email = normalizeEmail(text(value?.email));
+    return {
+      name: normalizePersonName(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
+      identification_type: text(value?.identification_type), company_number: normalizeIdentification(value?.company_number).replace(/\s+/g, ''),
+      phone: phone || mobile, mobile, office_phone: officePhone,
+      additional_phones: phoneArray(value?.additional_phones, [phone, mobile, officePhone]),
+      email, additional_emails: emailArray(value?.additional_emails, [email]),
+      correspondence_address: text(value?.correspondence_address)
+    };
+  };
   return {
     document_type: text(source.document_type),
     confidence: Math.min(1, Math.max(0, Number(source.confidence) || 0)),
@@ -920,6 +1024,21 @@ function normalizeMalaysianPhone(value: string): string {
 function normalizeEmail(value: string): string {
   const normalized = value.trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+}
+
+/**
+ * Blends the model's self-reported confidence with the measured completeness of the
+ * validated field-level confidence scores, so the document-level confidence reflects
+ * how much of the agreement was actually and verifiably extracted rather than trusting
+ * the model's self-assessment alone.
+ */
+function computeOverallConfidence(fieldConfidence: FieldConfidence, modelConfidence: number): number {
+  const scores = Object.values(fieldConfidence);
+  const model = Math.max(0, Math.min(1, Number(modelConfidence) || 0));
+  if (!scores.length) return model;
+  const completeness = scores.reduce((sum, score) => sum + Math.max(0, Math.min(100, score)), 0) / (scores.length * 100);
+  const blended = model * 0.5 + completeness * 0.5;
+  return Math.round(Math.max(0, Math.min(1, blended)) * 100) / 100;
 }
 
 function normalizeFieldConfidence(value: FieldConfidence | undefined, source: TenancyLegalIntelligence): FieldConfidence {
@@ -1266,7 +1385,7 @@ function normalizeContacts(value: ExtractedTenancyContact[] | undefined): Extrac
       source_excerpt: sourceExcerpt,
       confidence: Math.max(0, Math.min(100, Number(contact.confidence) || 0))
     };
-    if (!normalized.name && !normalized.company && !normalized.ic_passport && !normalized.company_number && !normalized.phone && !normalized.email) return [];
+    if (!normalized.name && !normalized.company && !normalized.ic_passport && !normalized.company_number && !normalized.phone && !normalized.office_phone && !normalized.email) return [];
     const key = `${normalized.role}:${normalized.email || normalized.phone || normalized.ic_passport || normalized.company_number || normalized.name}`.toLowerCase();
     if (seen.has(key)) return [];
     seen.add(key);
@@ -1274,11 +1393,34 @@ function normalizeContacts(value: ExtractedTenancyContact[] | undefined): Extrac
   });
 }
 
-function partyForContact(value: Partial<LegalParty>): LegalParty {
+function partyForContact(value: Partial<LegalParty> & { additional_phones?: unknown; additional_emails?: unknown }): LegalParty {
+  const phone = normalizeMalaysianPhone(extractionText(value.phone));
+  const mobile = normalizeMalaysianPhone(extractionText(value.mobile)) || (phone && /^\+601/.test(phone) ? phone : '');
+  const officePhone = normalizeMalaysianPhone(extractionText(value.office_phone));
+  const email = normalizeEmail(extractionText(value.email));
+  const phones = Array.isArray(value.additional_phones) ? value.additional_phones : [];
+  const emails = Array.isArray(value.additional_emails) ? value.additional_emails : [];
+  const excludedDigits = new Set([phone, mobile, officePhone].map((item) => item.replace(/\D/g, '')).filter(Boolean));
+  const seenPhones = new Set<string>();
+  const additionalPhones = phones.flatMap((item) => {
+    const normalized = normalizeMalaysianPhone(extractionText(item));
+    const digits = normalized.replace(/\D/g, '');
+    if (!normalized || excludedDigits.has(digits) || seenPhones.has(digits)) return [];
+    seenPhones.add(digits);
+    return [normalized];
+  });
+  const seenEmails = new Set<string>();
+  const additionalEmails = emails.flatMap((item) => {
+    const normalized = normalizeEmail(extractionText(item));
+    if (!normalized || normalized === email || seenEmails.has(normalized)) return [];
+    seenEmails.add(normalized);
+    return [normalized];
+  });
   return {
     name: normalizePersonName(value.name), company: extractionText(value.company), ic_passport: normalizeIdentification(value.ic_passport).replace(/\s+/g, ''),
     identification_type: extractionText(value.identification_type), company_number: normalizeIdentification(value.company_number).replace(/\s+/g, ''),
-    phone: normalizeMalaysianPhone(extractionText(value.phone)), email: normalizeEmail(extractionText(value.email)), correspondence_address: extractionText(value.correspondence_address)
+    phone: phone || mobile, mobile, office_phone: officePhone, additional_phones: additionalPhones,
+    email, additional_emails: additionalEmails, correspondence_address: extractionText(value.correspondence_address)
   };
 }
 

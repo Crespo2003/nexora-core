@@ -15,7 +15,11 @@ export type CanonicalTenancyParty = {
   identification_type: string;
   company_number: string;
   phone: string;
+  mobile: string;
+  office_phone: string;
+  additional_phones: string[];
   email: string;
+  additional_emails: string[];
   correspondence_address: string;
 };
 
@@ -144,22 +148,25 @@ export class OpenAiTenancyResponseError extends OpenAiClientError {
 
 const string = { type: 'string' } as const;
 const nullableMoney = { type: ['number', 'null'], minimum: 0 } as const;
+const stringArray = { type: 'array', items: string } as const;
 const party = {
   type: 'object', additionalProperties: false,
-  required: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'email', 'correspondence_address'],
+  required: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'mobile', 'office_phone', 'additional_phones', 'email', 'additional_emails', 'correspondence_address'],
   properties: {
     name: string, company: string, identification: string, identification_type: string, company_number: string,
-    phone: string, email: string, correspondence_address: string
+    phone: string, mobile: string, office_phone: string, additional_phones: stringArray,
+    email: string, additional_emails: stringArray, correspondence_address: string
   }
 } as const;
 const contact = {
   type: 'object', additionalProperties: false,
-  required: ['role', 'represents', 'name', 'company', 'identification', 'identification_type', 'company_number', 'ren_number', 'phone', 'email', 'correspondence_address', 'source_page', 'source_excerpt', 'confidence'],
+  required: ['role', 'represents', 'name', 'company', 'identification', 'identification_type', 'company_number', 'ren_number', 'phone', 'mobile', 'office_phone', 'additional_phones', 'email', 'additional_emails', 'correspondence_address', 'source_page', 'source_excerpt', 'confidence'],
   properties: {
     role: { type: 'string', enum: ['tenant', 'landlord', 'witness', 'agent', 'law_firm'] },
     represents: { type: 'string', enum: ['tenant', 'landlord', 'both', 'neutral', 'unknown'] },
     name: string, company: string, identification: string, identification_type: string, company_number: string, ren_number: string,
-    phone: string, email: string, correspondence_address: string,
+    phone: string, mobile: string, office_phone: string, additional_phones: stringArray,
+    email: string, additional_emails: stringArray, correspondence_address: string,
     source_page: { type: ['integer', 'null'], minimum: 1 }, source_excerpt: string,
     confidence: { type: 'number', minimum: 0, maximum: 1 }
   }
@@ -389,13 +396,26 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
   const object = (key: string) => asObject(source[key]) ?? {};
   const strings = (sourceValue: Record<string, unknown>, keys: readonly string[]) => Object.fromEntries(keys.map((key) => [key, normalizeText(sourceValue[key])])) as Record<string, string>;
   const document = strings(object('document'), ['type', 'language', 'summary']);
-  const normalizeParty = (value: Record<string, unknown>) => ({
-    ...strings(value, ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'email', 'correspondence_address']),
-    name: normalizePersonName(value.name),
-    identification: normalizeIdentification(value.identification),
-    company_number: normalizeIdentification(value.company_number),
-    correspondence_address: normalizeLabelledValue(value.correspondence_address)
-  });
+  const normalizeParty = (value: Record<string, unknown>) => {
+    const base = strings(value, ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'mobile', 'office_phone', 'email', 'correspondence_address']);
+    const phone = normalizePhoneCandidate(base.phone);
+    const mobile = normalizePhoneCandidate(base.mobile) || (phone && /^\+?60\s?1/.test(phone.replace(/\s+/g, '')) ? phone : '');
+    const officePhone = normalizePhoneCandidate(base.office_phone);
+    const email = normalizeEmailCandidate(base.email);
+    return {
+      ...base,
+      name: normalizePersonName(value.name),
+      identification: normalizeIdentification(value.identification),
+      company_number: normalizeIdentification(value.company_number),
+      correspondence_address: normalizeLabelledValue(value.correspondence_address),
+      phone: phone || mobile,
+      mobile,
+      office_phone: officePhone,
+      additional_phones: normalizePhoneList(value.additional_phones, [phone, mobile, officePhone]),
+      email,
+      additional_emails: normalizeEmailList(value.additional_emails, [email])
+    };
+  };
   const tenant = normalizeParty(object('tenant'));
   const landlord = normalizeParty(object('landlord'));
   const property = strings(object('property'), ['name', 'unit_number', 'address', 'street', 'postcode', 'city', 'state', 'country', 'property_type', 'build_up', 'land_area', 'car_parks']);
@@ -460,6 +480,53 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
   };
 }
 
+/** Rejects NRIC, passport, bank account, date, unit, or page values that are not a phone number. */
+export function normalizePhoneCandidate(value: unknown): string {
+  const text = normalizeText(value);
+  if (!text) return '';
+  if (/\b(?:rm|myr)\b/i.test(text) || /\d{4}[/-]\d{1,2}[/-]\d{1,2}/.test(text) || /\d{1,2}[/-]\d{1,2}[/-]\d{4}/.test(text)) return '';
+  const digits = text.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15 || /^(\d)\1{6,}$/.test(digits)) return '';
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export function normalizeEmailCandidate(value: unknown): string {
+  const text = normalizeText(value).toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : '';
+}
+
+/** Deduplicates a phone list against the primary numbers so the same number is never repeated. */
+function normalizePhoneList(value: unknown, exclude: string[] = []): string[] {
+  if (!Array.isArray(value)) return [];
+  const excluded = new Set(exclude.map((item) => item.replace(/\D/g, '')).filter(Boolean));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const candidate = normalizePhoneCandidate(item);
+    if (!candidate) continue;
+    const digits = candidate.replace(/\D/g, '');
+    if (excluded.has(digits) || seen.has(digits)) continue;
+    seen.add(digits);
+    result.push(candidate);
+  }
+  return result;
+}
+
+function normalizeEmailList(value: unknown, exclude: string[] = []): string[] {
+  if (!Array.isArray(value)) return [];
+  const excluded = new Set(exclude.map((item) => item.toLowerCase()));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const candidate = normalizeEmailCandidate(item);
+    if (!candidate || excluded.has(candidate) || seen.has(candidate)) continue;
+    seen.add(candidate);
+    result.push(candidate);
+  }
+  return result;
+}
+
+
 /** Removes document labels while retaining the actual NRIC, passport, or registration value. */
 export function normalizeIdentification(value: unknown): string {
   return normalizeText(value)
@@ -498,6 +565,10 @@ function normalizeContacts(value: unknown): CanonicalTenancyContact[] {
     const role = normalizeText(source.role).toLowerCase();
     if (!supportedRoles.includes(role as typeof supportedRoles[number])) return [];
     const represents = normalizeText(source.represents).toLowerCase();
+    const phone = normalizePhoneCandidate(source.phone);
+    const mobile = normalizePhoneCandidate(source.mobile) || (phone && /^\+?60\s?1/.test(phone.replace(/\s+/g, '')) ? phone : '');
+    const officePhone = normalizePhoneCandidate(source.office_phone);
+    const email = normalizeEmailCandidate(source.email);
     const party = {
       name: normalizePersonName(source.name),
       company: normalizeText(source.company),
@@ -505,11 +576,15 @@ function normalizeContacts(value: unknown): CanonicalTenancyContact[] {
       identification_type: normalizeText(source.identification_type),
       company_number: normalizeIdentification(source.company_number),
       ren_number: normalizeIdentification(source.ren_number),
-      phone: normalizeText(source.phone),
-      email: normalizeText(source.email).toLowerCase(),
+      phone: phone || mobile,
+      mobile,
+      office_phone: officePhone,
+      additional_phones: normalizePhoneList(source.additional_phones, [phone, mobile, officePhone]),
+      email,
+      additional_emails: normalizeEmailList(source.additional_emails, [email]),
       correspondence_address: normalizeLabelledValue(source.correspondence_address)
     };
-    if (!party.name && !party.company && !party.identification && !party.phone && !party.email) return [];
+    if (!party.name && !party.company && !party.identification && !party.phone && !party.mobile && !party.office_phone && !party.email) return [];
     const sourcePage = Number(source.source_page);
     return [{
       role: role as CanonicalTenancyContact['role'],
@@ -657,8 +732,8 @@ function validateRawValueShapes(value: Record<string, unknown>): string[] {
   const issues: string[] = [];
   const textFields: Record<string, readonly string[]> = {
     document: ['type', 'language', 'summary'],
-    tenant: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'email', 'correspondence_address'],
-    landlord: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'email', 'correspondence_address'],
+    tenant: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'mobile', 'office_phone', 'email', 'correspondence_address'],
+    landlord: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'mobile', 'office_phone', 'email', 'correspondence_address'],
     property: ['name', 'unit_number', 'address', 'street', 'postcode', 'city', 'state', 'country', 'property_type', 'build_up', 'land_area', 'car_parks'],
     tenancy: ['commencement_date', 'expiry_date', 'renewal_option', 'renewal_period', 'automatic_renewal', 'notice_period', 'payment_due_day'],
     payment: ['method', 'bank_name', 'account_number', 'account_holder', 'late_payment_interest', 'grace_period'],
@@ -680,6 +755,12 @@ function validateRawValueShapes(value: Record<string, unknown>): string[] {
   }
   if (value.confidence !== undefined && typeof value.confidence !== 'string' && typeof value.confidence !== 'number') issues.push('confidence');
   for (const field of ['contacts', 'clauses', 'risks', 'warnings']) if (value[field] !== undefined && !Array.isArray(value[field])) issues.push(field);
+  for (const section of ['tenant', 'landlord'] as const) {
+    const object = asObject(value[section]) ?? {};
+    for (const field of ['additional_phones', 'additional_emails']) {
+      if (object[field] !== undefined && !Array.isArray(object[field])) issues.push(`${section}.${field}`);
+    }
+  }
   const legal = asObject(value.legal) ?? {};
   if (legal.restrictions !== undefined && !Array.isArray(legal.restrictions)) issues.push('legal.restrictions');
   const inventory = asObject(value.inventory) ?? {};
