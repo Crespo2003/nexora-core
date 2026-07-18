@@ -8,6 +8,7 @@ import { formatMYR } from '../../lib/formatters';
 import { defaultLanguage, languageStorageKey } from '../../lib/i18n/translations';
 import { DateInput } from '../../lib/dates/DateInput';
 import { currentIsoDate, currentIsoMonth, formatNexoraDate, normalizeDateForStorage } from '../../lib/dates/formatDate';
+import WhatsAppActions from '../../lib/whatsapp/WhatsAppActions';
 
 type UiLanguage = Exclude<Language, 'bilingual'>;
 type ViewKey = 'dashboard' | 'followups' | 'accounts' | 'upload' | 'payment' | 'reminder' | 'landlord' | 'detail';
@@ -558,6 +559,17 @@ function FollowupQueue({ rows, language, onSelect }: { rows: CollectionOverviewR
               <button onClick={() => onSelect(row, 'snoozed')}>{language === 'zh' ? '延后' : 'Snooze'}</button>
               <button onClick={() => onSelect(row, 'promise_to_pay')}>{language === 'zh' ? '承诺付款' : 'Promise to pay'}</button>
               <button onClick={() => onSelect(row, 'escalated')}>{language === 'zh' ? '升级处理' : 'Escalate'}</button>
+              <WhatsAppActions
+                contact={{ name: row.tenancy.tenant, role: 'tenant', represents: 'tenant', phone: row.tenancy.tenantPhone }}
+                tenancyId={row.tenancy.id}
+                defaultTemplateType={row.outstanding > 0 ? 'rental_overdue' : 'general_follow_up'}
+                variables={{
+                  tenant_name: row.tenancy.tenant, property_name: row.tenancy.property, unit_number: row.tenancy.unitNo,
+                  monthly_rental: row.tenancy.monthlyRental, amount_due: row.outstanding, outstanding_amount: row.outstanding,
+                  due_date: row.collection.dueDate, agent_name: row.tenancy.assignedAgent
+                }}
+                uiLanguage={language}
+              />
             </div>
           </article>
         ))}

@@ -13,6 +13,7 @@ import {
 } from '../../../lib/tenancy-workspace/core';
 import { DateInput } from '../../../lib/dates/DateInput';
 import { currentIsoDate, currentIsoMonth, formatNexoraDate, formatNexoraDateTime, isoMonthToDisplayMonth } from '../../../lib/dates/formatDate';
+import WhatsAppActions from '../../../lib/whatsapp/WhatsAppActions';
 import type {
   CollectionPaymentRecord, CollectionRecord, DocumentRecord, TenancySearchResult, TenancyWorkspaceData, UtilityAccountRecord
 } from '../../../lib/tenancy-workspace/types';
@@ -170,12 +171,28 @@ export default function TenancyWorkspace({ tenancyId }: { tenancyId: string }) {
           ['Name', tenancy.tenant], ['Passport / IC', tenancy.tenant_id_no], ['Phone', tenancy.tenant_phone],
           ['Email', tenancy.tenant_email], ['Nationality', tenancy.tenant_nationality], ['Emergency contact', tenancy.tenant_emergency_contact],
           ['Company', tenancy.tenant_company], ['Occupation', tenancy.tenant_occupation], ['Move-in date', formatDate(tenancy.move_in_date)]
-        ]} />
+        ]} whatsapp={<WhatsAppActions
+          contact={{ name: tenancy.tenant, role: 'tenant', represents: 'tenant', phone: tenancy.tenant_phone }}
+          tenancyId={tenancyId}
+          defaultTemplateType="general_follow_up"
+          variables={{
+            tenant_name: tenancy.tenant, property_name: tenancy.property, unit_number: tenancy.unit_no,
+            monthly_rental: tenancy.monthly_rental, tenancy_expiry_date: tenancy.expiry_date
+          }}
+        />} />
         <InfoSection icon={<UsersRound />} title="Landlord / 房东" onEdit={canEdit ? () => setEditing('landlord') : undefined} rows={[
           ['Name', tenancy.landlord], ['Phone', tenancy.landlord_phone], ['Email', tenancy.landlord_email],
           ['Bank account', tenancy.landlord_bank_account], ['Emergency contact', tenancy.landlord_emergency_contact],
           ['Reminder language', tenancy.landlord_preferred_language]
-        ]} />
+        ]} whatsapp={<WhatsAppActions
+          contact={{ name: tenancy.landlord, role: 'landlord', represents: 'landlord', phone: tenancy.landlord_phone }}
+          tenancyId={tenancyId}
+          defaultTemplateType="general_follow_up"
+          variables={{
+            landlord_name: tenancy.landlord, property_name: tenancy.property, unit_number: tenancy.unit_no,
+            tenancy_expiry_date: tenancy.expiry_date
+          }}
+        />} />
       </div>
 
       <CollectionSection tenancyId={tenancyId} collection={workspace.currentCollection} payments={workspace.collectionPayments} totalOutstanding={totalOutstanding} canFinance={canFinance} refresh={load} setNotice={setNotice} />
@@ -271,7 +288,7 @@ function EditPanel({ section, tenancy, saving, onClose, onSave }: { section: 'pr
 
 function SectionHeading({ icon, title, subtitle, action }: { icon: React.ReactNode; title: string; subtitle: string; action?: React.ReactNode }) { return <div className="tw-section-heading"><div className="tw-section-title"><span>{icon}</span><div><h2>{title}</h2><p>{subtitle}</p></div></div>{action}</div>; }
 function Metric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) { return <div className={`tw-metric ${warning ? 'warning' : ''}`}><span>{label}</span><strong>{value}</strong></div>; }
-function InfoSection({ icon, title, rows, onEdit }: { icon: React.ReactNode; title: string; rows: string[][]; onEdit?: () => void }) { return <section className="tw-section tw-info"><SectionHeading icon={icon} title={title} subtitle="Verified tenancy contact record" action={onEdit ? <button className="tw-icon-button" onClick={onEdit} aria-label={`Edit ${title}`} title={`Edit ${title}`}><Edit3 size={17} /></button> : undefined} /><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Not provided'}</dd></div>)}</dl></section>; }
+function InfoSection({ icon, title, rows, onEdit, whatsapp }: { icon: React.ReactNode; title: string; rows: string[][]; onEdit?: () => void; whatsapp?: React.ReactNode }) { return <section className="tw-section tw-info"><SectionHeading icon={icon} title={title} subtitle="Verified tenancy contact record" action={<>{whatsapp}{onEdit && <button className="tw-icon-button" onClick={onEdit} aria-label={`Edit ${title}`} title={`Edit ${title}`}><Edit3 size={17} /></button>}</>} /><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Not provided'}</dd></div>)}</dl></section>; }
 function Empty({ title, text }: { title: string; text: string }) { return <div className="tw-empty"><ReceiptText size={24} /><div><strong>{title}</strong><p>{text}</p></div></div>; }
 function WorkspaceLoading() { return <main className="tw-shell"><div className="tw-loading"><LoaderCircle className="tw-spin" size={30} /><h1>Loading tenancy workspace</h1><p>Bringing together the property, collections, documents and activity.</p></div></main>; }
 function WorkspaceError({ notice, reload }: { notice: Notice; reload: () => Promise<void> }) { return <main className="tw-shell"><div className="tw-loading"><Clock3 size={30} /><h1>Workspace unavailable</h1><p>{notice?.text || 'The tenancy could not be loaded.'}</p><button className="tw-primary" onClick={() => void reload()}><RefreshCw size={16} /> Try again</button></div></main>; }
