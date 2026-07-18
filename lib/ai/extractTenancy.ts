@@ -9,9 +9,11 @@ import { formatMYR } from '../formatters';
 import { normalizeIdentification, normalizePersonName } from './tenancyExtractionContract';
 import {
   canonicalTenancyExtractionSchema,
+  mergeCanonicalTenancyExtractions,
   parseOpenAITenancyResponse,
   type CanonicalTenancyExtraction
 } from './tenancyExtractionContract';
+import { deduplicateDocumentContent, prioritizeChunksWithinBudget } from './documentTextPreparation';
 
 export type LegalParty = {
   name: string;
@@ -185,6 +187,7 @@ export type TenancyProcessingResult = {
   pageCount: number | null;
   usedOcr: boolean;
   chunkCount: number;
+  aiCallCount: number;
   model: string;
 };
 
@@ -196,8 +199,12 @@ type ExtractTenancyOptions = {
   maxChunkCharacters?: number;
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Timeout applied only to the single allowed retry attempt of each OpenAI call. */
+  retryTimeoutMs?: number;
   maxAttempts?: number;
   requestId?: string;
+  /** Invoked once per actual OpenAI HTTP call, for call-count observability. */
+  onAiCallStart?: (attempt: number) => void;
 };
 
 const confidencePaths = [
@@ -274,6 +281,14 @@ export async function extractTenancyDocument(
   };
 }
 
+/**
+ * A normal Malaysian tenancy agreement, after deterministic dedup/cleanup, comfortably fits
+ * under this size so it uses exactly one OpenAI call. Oversized documents are capped to
+ * maxChunksPerDocument sections instead of one call per page.
+ */
+const maxSafeSingleCallCharacters = 120_000;
+const maxChunksPerDocument = 2;
+
 export async function extractTenancyText(
   rawText: string,
   filename: string,
@@ -286,42 +301,59 @@ export async function extractTenancyText(
   if (!apiKey) throw new TenancyExtractionError('openai_not_configured');
 
   const model = options.model?.trim() || getOpenAiConfiguration().tenancyModel;
-  const chunks = splitTenancyDocument(normalizedText, options.maxChunkCharacters);
-  const partials: CanonicalTenancyExtraction[] = [];
 
-  for (let index = 0; index < chunks.length; index += 1) {
-    partials.push(await requestStructuredExtraction({
-      apiKey,
-      model,
-      fetcher: options.fetcher,
-      maxOutputTokens: options.maxOutputTokens,
-      timeoutMs: options.timeoutMs,
-      maxAttempts: options.maxAttempts,
-      requestId: options.requestId,
-      prompt: `Document: ${filename}\nSection ${index + 1} of ${chunks.length}. Extract every relevant fact from this section.\n\n${chunks[index]}`
-    }));
-  }
+  // Deterministic, non-AI cleanup: drop empty OCR lines, repeated headers/footers, and
+  // duplicate pages so a normal tenancy agreement fits inside one extraction call.
+  const deduplicated = deduplicateDocumentContent(normalizedText);
+  const preparedText = deduplicated.text || normalizedText;
 
-  const reconciled = partials.length === 1
-    ? partials[0]
-    : await requestStructuredExtraction({
-      apiKey,
-      model,
-      fetcher: options.fetcher,
-      maxOutputTokens: options.maxOutputTokens,
-      timeoutMs: options.timeoutMs,
-      maxAttempts: options.maxAttempts,
-      requestId: options.requestId,
-      prompt: `Reconcile these ordered section extractions from one Malaysian tenancy agreement. Resolve conflicts using repeated agreement evidence, retain facts found in any section, and return one complete record.\n\n${JSON.stringify(partials)}`
-    });
+  const allChunks = splitTenancyDocument(preparedText, options.maxChunkCharacters ?? maxSafeSingleCallCharacters);
+  // Never exceed two OpenAI calls for one document, however large; keep the sections most
+  // likely to carry tenancy-critical facts (parties, money, dates, clauses, signatures).
+  const chunks = prioritizeChunksWithinBudget(allChunks, maxChunksPerDocument);
+  const truncated = allChunks.length > chunks.length;
+
+  let aiCallCount = 0;
+  const onAttemptStart = (attempt: number) => {
+    aiCallCount += 1;
+    options.onAiCallStart?.(attempt);
+  };
+
+  // Hard ceiling of two OpenAI calls per document: a normal (single-chunk) agreement gets
+  // 1 primary call + 1 transient-failure retry; an oversized (two-chunk) document spends
+  // both calls on its two parallel sections with no retry.
+  const attemptsPerChunk = chunks.length === 1 ? Math.max(1, Math.min(options.maxAttempts ?? 2, 2)) : 1;
+
+  const partials = await Promise.all(chunks.map((chunk, index) => requestStructuredExtraction({
+    apiKey,
+    model,
+    fetcher: options.fetcher,
+    maxOutputTokens: options.maxOutputTokens,
+    timeoutMs: options.timeoutMs,
+    retryTimeoutMs: options.retryTimeoutMs,
+    maxAttempts: attemptsPerChunk,
+    requestId: options.requestId,
+    onAttemptStart,
+    prompt: chunks.length === 1
+      ? `Document: ${filename}\nExtract every relevant fact from the complete agreement below.\n\n${chunk}`
+      : `Document: ${filename}\nSection ${index + 1} of ${chunks.length}. Extract every relevant fact from this section.\n\n${chunk}`
+  })));
+
+  // Combine multi-section results deterministically; no further OpenAI call is made to
+  // reconcile them.
+  const reconciled = mergeCanonicalTenancyExtractions(partials);
   const normalized = validateFieldEvidence(enrichExtractedTenancyTerms(normalizeExtraction(mapCanonicalTenancyExtraction(reconciled)), normalizedText), normalizedText);
-  const extraction = applyRiskEngine(normalized, normalizedText);
+  let extraction = applyRiskEngine(normalized, normalizedText);
+  if (truncated) {
+    extraction = { ...extraction, warnings: uniqueStrings([...extraction.warnings, 'Document exceeded the safe extraction size; the highest-priority sections were analyzed and the remainder was skipped.']) };
+  }
 
   return {
     extraction,
     rawText: normalizedText,
     summary: reconciled.document.summary || createTenancySummary(extraction),
     chunkCount: chunks.length,
+    aiCallCount,
     model
   };
 }
@@ -756,8 +788,10 @@ async function requestStructuredExtraction(input: {
   fetcher?: typeof fetch;
   maxOutputTokens?: number;
   timeoutMs?: number;
+  retryTimeoutMs?: number;
   maxAttempts?: number;
   requestId?: string;
+  onAttemptStart?: (attempt: number) => void;
 }): Promise<CanonicalTenancyExtraction> {
   try {
     return await requestStructuredOpenAi({
@@ -770,8 +804,10 @@ async function requestStructuredExtraction(input: {
       prompt: input.prompt,
       maxOutputTokens: input.maxOutputTokens ?? 12_000,
       timeoutMs: input.timeoutMs,
+      retryTimeoutMs: input.retryTimeoutMs,
       maxAttempts: input.maxAttempts,
       requestId: input.requestId,
+      onAttemptStart: input.onAttemptStart,
       parseResponse: parseOpenAITenancyResponse
     });
   } catch (error) {

@@ -79,6 +79,7 @@ export function extractTenancyDeterministically(
       usedOcr: false,
       pageCount: null,
       chunkCount: 1,
+      aiCallCount: 0,
       model: null,
       fallbackReason
     },

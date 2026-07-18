@@ -12,6 +12,21 @@ const storageBucket = 'real-estate-documents';
 const reusableExtractionStatuses = ['extraction_completed', 'completed', 'ready'];
 const retryableDocumentStatuses = ['ocr_required', 'extraction_failed'];
 
+/**
+ * Explicit stage budgets so the route always answers well before the 300-second Vercel
+ * function ceiling. The primary OpenAI request gets at most 90s and its single
+ * transient-failure retry at most 60s; whatever wall-clock time earlier stages consumed
+ * is subtracted so the total application budget never exceeds 240s.
+ */
+const uploadTimeBudget = Object.freeze({
+  totalMs: 240_000,
+  fileRetrievalMs: 20_000,
+  textExtractionMs: 90_000,
+  aiPrimaryMs: 90_000,
+  aiRetryMs: 60_000,
+  persistenceReserveMs: 20_000
+});
+
 type UploadStage = 'auth' | 'upload' | 'validation' | 'storage' | 'pdf' | 'docx' | 'ocr' | 'openai' | 'parser' | 'mapping' | 'database' | 'unknown';
 type UploadDependencies = {
   extractTenancyFile: typeof extractTenancyFile;
@@ -153,6 +168,11 @@ function stageForExtractionError(error: unknown, mimeType: string): UploadStage 
 function errorCode(error: unknown): string {
   if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return error.code;
   return getApiErrorMessage(error);
+}
+
+/** Transient AI/OCR failures the caller may safely retry against the preserved document. */
+function retryableFailureCode(code: string): boolean {
+  return ['openai_timeout', 'openai_rate_limited', 'openai_server_error', 'openai_request_failed', 'ocr_provider_timeout', 'ocr_provider_request_failed'].includes(code);
 }
 
 function errorName(error: unknown): string {
@@ -340,6 +360,12 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         directStorageUpload = true;
         uploadedPath = storagePath;
         uploadedStorageReference = storagePath;
+        logExtractionDiagnostic('document_download_completed', {
+          requestId,
+          stage,
+          fileSize,
+          elapsedMs: Date.now() - downloadStartedAt
+        });
         logExtractionDiagnostic('storage_completed', {
           requestId,
           stage,
@@ -513,12 +539,23 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
 
       let extraction: Awaited<ReturnType<typeof extractTenancyFile>>;
       stage = isPdf ? 'pdf' : isDocx ? 'docx' : 'parser';
+      let aiCallCount = 0;
       try {
+        // The AI stage may only spend what remains of the total budget after upload,
+        // storage, and validation, minus the persistence reserve; this guarantees the
+        // route responds before the platform's 300-second ceiling.
+        const elapsedBeforeExtraction = Date.now() - startedAt;
+        const remainingForAi = uploadTimeBudget.totalMs - elapsedBeforeExtraction - uploadTimeBudget.persistenceReserveMs;
+        const aiPrimaryTimeoutMs = Math.max(10_000, Math.min(uploadTimeBudget.aiPrimaryMs, remainingForAi));
+        const aiRetryTimeoutMs = Math.max(5_000, Math.min(uploadTimeBudget.aiRetryMs, remainingForAi - aiPrimaryTimeoutMs));
+        logExtractionDiagnostic('text_extraction_started', { requestId, stage, fileSize, elapsedMs: elapsedBeforeExtraction });
         extraction = await dependencies.extractTenancyFile({ buffer, filename: fileName, mimeType }, {
           maxOutputTokens: 6_000,
-          timeoutMs: 120_000,
+          timeoutMs: aiPrimaryTimeoutMs,
+          retryTimeoutMs: aiRetryTimeoutMs,
           maxAttempts: 2,
-          requestId
+          requestId,
+          onAiCallStart: () => { aiCallCount += 1; }
         });
       } catch (error) {
         const extractionStage = stageForExtractionError(error, mimeType);
@@ -529,6 +566,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
           stage: extractionStage,
           errorName: errorName(error),
           errorCode: code,
+          aiCallCount,
           elapsedMs: Date.now() - startedAt
         });
         const sanitizedFilename = storagePath.split('/').pop() ?? 'tenancy-agreement';
@@ -557,10 +595,13 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         if (bundle.error) throw bundle.error;
         uploadedPath = null;
         const saved = bundle.data as { document: { id: string }; extraction: { id: string } };
+        // The stored document and extraction records remain available; retry runs against
+        // the preserved storage object without re-uploading or duplicating the document.
         return fail(422, extractionStage, code, {
           documentId: saved.document.id,
           extractionId: saved.extraction.id,
           retryAllowed: true,
+          retryable: retryableFailureCode(code),
           rollbackStatus: 'document-preserved'
         });
       }
@@ -570,12 +611,20 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         stage: 'mapping',
         textLength: extraction.rawText.length,
         usedOcr: extraction.document.usedOcr,
+        pageCount: extraction.document.pageCount ?? undefined,
         provider: extraction.provider,
         fallbackReason: extraction.fallbackReason,
+        aiCallCount,
         elapsedMs: Date.now() - startedAt
       });
 
       stage = 'mapping';
+      logExtractionDiagnostic('deterministic_mapping_completed', {
+        requestId,
+        stage,
+        aiCallCount,
+        elapsedMs: Date.now() - startedAt
+      });
       return respond(200, {
         success: true,
         reused: Boolean(existingDocument),

@@ -90,6 +90,7 @@ export type TenancyExtraction = {
     usedOcr: boolean;
     pageCount: number | null;
     chunkCount: number;
+    aiCallCount?: number;
     model: string | null;
     fallbackReason: TenancyExtractionFallbackReason | null;
   };
@@ -209,6 +210,7 @@ function toLegacyExtraction(
       usedOcr: result.usedOcr,
       pageCount: result.pageCount,
       chunkCount: result.chunkCount,
+      aiCallCount: result.aiCallCount,
       model: result.model,
       fallbackReason: null
     },

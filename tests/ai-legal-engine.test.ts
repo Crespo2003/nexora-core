@@ -182,7 +182,7 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
   assert.match(summary, /2 legal risks detected/);
 });
 
-test('GPT client retries transient failures and preserves field-level confidence', async () => {
+test('GPT client retries a transient failure once only and preserves field-level confidence', async () => {
   let calls = 0;
   const expected = baseExtraction({
     field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 },
@@ -192,12 +192,12 @@ test('GPT client retries transient failures and preserves field-level confidence
   });
   const fetcher: typeof fetch = async () => {
     calls += 1;
-    return calls < 3 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
+    return calls < 2 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
   };
   const result = await extractTenancyText(`${'Complete Malaysian tenancy agreement. '.repeat(8)} Tenant: Tenant`, 'retry.pdf', {
     apiKey: 'retry-key', model: 'gpt-5.5', fetcher
   });
-  assert.equal(calls, 3);
+  assert.equal(calls, 2);
   assert.equal(result.extraction.field_confidence['tenant.name'], 79);
   assert.equal(result.extraction.field_confidence['tenancy.renewal_option'], 79);
   assert.ok(Object.keys(result.extraction.field_confidence).length >= 40);

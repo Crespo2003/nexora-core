@@ -4,11 +4,13 @@ import test from 'node:test';
 import { requestStructuredOpenAi } from '../lib/ai/openAiClient';
 import { OpenAiOcrProvider } from '../lib/ocr/openAiOcr';
 
-test('the tenancy upload allows a 120-second OpenAI request and retries it once', () => {
+test('the tenancy upload budgets a 90-second primary OpenAI request with one 60-second retry', () => {
   const handler = readFileSync('lib/tenancy/tenancyUploadHandler.ts', 'utf8');
-  assert.match(handler, /timeoutMs: 120_000/);
+  assert.match(handler, /aiPrimaryMs: 90_000/);
+  assert.match(handler, /aiRetryMs: 60_000/);
+  assert.match(handler, /totalMs: 240_000/);
   assert.match(handler, /maxAttempts: 2/);
-  assert.doesNotMatch(handler, /timeoutMs: 75_000|maxAttempts: 1/);
+  assert.doesNotMatch(handler, /timeoutMs: 120_000|timeoutMs: 75_000|maxAttempts: [13-9]/);
 });
 
 test('a slow first OpenAI attempt is retried before the caller receives a failure', async () => {

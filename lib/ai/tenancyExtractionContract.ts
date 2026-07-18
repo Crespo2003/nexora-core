@@ -857,3 +857,76 @@ function validDate(year: string, month: string, day: string): boolean {
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
+
+/**
+ * Deterministically combines partial canonical extractions from chunked sections of one
+ * oversized document into a single record, without a further OpenAI reconciliation call.
+ * Earlier sections win on conflicting scalar facts (documents are read top-to-bottom, and
+ * the first statement of a fact is usually the authoritative one); arrays are unioned and
+ * deduplicated; booleans are combined with OR since a clause present in any section is
+ * present in the agreement; confidence is averaged.
+ */
+export function mergeCanonicalTenancyExtractions(parts: CanonicalTenancyExtraction[]): CanonicalTenancyExtraction {
+  if (parts.length === 0) throw new Error('mergeCanonicalTenancyExtractions requires at least one part');
+  if (parts.length === 1) return parts[0];
+  const merged = parts.reduce((accumulator, part) => mergeValue(accumulator, part) as CanonicalTenancyExtraction);
+  const confidences = parts.map((part) => Number(part.confidence) || 0).filter((value) => value > 0);
+  const confidence = confidences.length ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length : 0;
+  return { ...merged, confidence };
+}
+
+function mergeValue(a: unknown, b: unknown): unknown {
+  if (a === undefined || a === null) return b;
+  if (b === undefined || b === null) return a;
+  if (Array.isArray(a) && Array.isArray(b)) return mergeArray(a, b);
+  if (typeof a === 'boolean' && typeof b === 'boolean') return a || b;
+  if (typeof a === 'number' && typeof b === 'number') return a;
+  if (typeof a === 'string' && typeof b === 'string') return a.trim() ? a : b;
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    const result: Record<string, unknown> = {};
+    for (const key of keys) result[key] = mergeValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]);
+    return result;
+  }
+  return a;
+}
+
+function mergeArray(a: unknown[], b: unknown[]): unknown[] {
+  if (a.length === 0) return b;
+  if (b.length === 0) return a;
+  const sample = a[0] ?? b[0];
+  if (isPlainObject(sample)) {
+    const seen = new Set<string>();
+    const result: unknown[] = [];
+    for (const item of [...a, ...b]) {
+      const key = objectIdentityKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(item);
+    }
+    return result;
+  }
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const item of [...a, ...b]) {
+    const key = typeof item === 'string' ? item.trim().toLowerCase() : JSON.stringify(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function objectIdentityKey(item: unknown): string {
+  if (!isPlainObject(item)) return JSON.stringify(item);
+  const record = item as Record<string, unknown>;
+  const identity = ['name', 'role', 'phone', 'email', 'identification', 'code', 'label']
+    .map((field) => normalizeText(record[field]).toLowerCase())
+    .filter(Boolean)
+    .join('|');
+  return identity || JSON.stringify(item);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}

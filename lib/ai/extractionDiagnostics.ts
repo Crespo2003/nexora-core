@@ -22,6 +22,7 @@ type DiagnosticDetails = {
   tenancyModel?: string;
   ocrModel?: string;
   attempt?: number;
+  aiCallCount?: number;
   statusCode?: number;
   elapsedMs?: number;
   errorName?: string;
