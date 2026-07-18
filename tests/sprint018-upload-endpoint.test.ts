@@ -92,8 +92,8 @@ test('upload route uses the Node runtime and bounded AI work before Vercel timeo
   assert.match(handler, /aiPrimaryMs: 90_000/);
   assert.match(handler, /aiRetryMs: 60_000/);
   assert.match(handler, /maxAttempts: 2/);
-  assert.match(handler, /maxOutputTokens: 6_000/);
-  assert.match(extraction, /maxOutputTokens: input\.maxOutputTokens \?\? 12_000/);
+  assert.match(handler, /maxOutputTokens: 16_000/);
+  assert.match(extraction, /maxOutputTokens: input\.maxOutputTokens \?\? 16_000/);
   assert.match(ocr, /const ocrRequestTimeoutMs = 120_000/);
   assert.match(ocr, /const ocrMaxAttempts = 2/);
   assert.match(ocr, /timeoutMs: ocrRequestTimeoutMs, maxRetries: 0/);

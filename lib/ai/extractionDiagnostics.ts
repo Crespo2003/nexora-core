@@ -23,6 +23,9 @@ type DiagnosticDetails = {
   ocrModel?: string;
   attempt?: number;
   aiCallCount?: number;
+  inputCharacterCount?: number;
+  estimatedInputTokens?: number;
+  maxOutputTokens?: number;
   statusCode?: number;
   elapsedMs?: number;
   errorName?: string;

@@ -95,8 +95,19 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const attemptStartedAt = Date.now();
+    const maxOutputTokens = request.maxOutputTokens ?? 12_000;
+    const inputCharacterCount = request.system.length + request.prompt.length;
     try {
-      logOpenAiDiagnostic('request_started', { requestId: request.requestId, provider: 'openai', attempt, tenancyModel: model, openAiKeyPresent: true });
+      logOpenAiDiagnostic('request_started', {
+        requestId: request.requestId,
+        provider: 'openai',
+        attempt,
+        tenancyModel: model,
+        openAiKeyPresent: true,
+        inputCharacterCount,
+        estimatedInputTokens: Math.ceil(inputCharacterCount / 4),
+        maxOutputTokens
+      });
       const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: attempt === 1 ? request.timeoutMs : (request.retryTimeoutMs ?? request.timeoutMs), maxRetries: 0 });
       request.onAttemptStart?.(attempt);
       const response = await client.responses.create({
@@ -114,7 +125,7 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
             schema: request.schema
           }
         },
-        max_output_tokens: request.maxOutputTokens ?? 12_000
+        max_output_tokens: maxOutputTokens
       });
 
       const payload = response as unknown as ResponsesPayload;
@@ -126,6 +137,8 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         tenancyModel: model,
         upstreamRequestId: readResponseRequestId(response),
         elapsedMs: Date.now() - attemptStartedAt,
+        maxOutputTokens,
+        estimatedInputTokens: Math.ceil(inputCharacterCount / 4),
         ...responseDetails
       });
 

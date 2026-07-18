@@ -550,7 +550,13 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         const aiRetryTimeoutMs = Math.max(5_000, Math.min(uploadTimeBudget.aiRetryMs, remainingForAi - aiPrimaryTimeoutMs));
         logExtractionDiagnostic('text_extraction_started', { requestId, stage, fileSize, elapsedMs: elapsedBeforeExtraction });
         extraction = await dependencies.extractTenancyFile({ buffer, filename: fileName, mimeType }, {
-          maxOutputTokens: 6_000,
+          // Smallest safe output budget for the consolidated single-call schema: strict
+          // structured outputs force every key to be emitted (~900 tokens empty skeleton,
+          // ~4,500-6,000 tokens for a fully populated agreement under the compact-output
+          // caps), plus reasoning-token headroom on reasoning-capable models, which count
+          // against max_output_tokens. 6,000 was sized for the old per-chunk partials and
+          // caused status=incomplete/max_output_tokens (openai_truncated) on normal TAs.
+          maxOutputTokens: 16_000,
           timeoutMs: aiPrimaryTimeoutMs,
           retryTimeoutMs: aiRetryTimeoutMs,
           maxAttempts: 2,

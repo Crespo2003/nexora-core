@@ -168,6 +168,8 @@ export type TenancyLegalIntelligence = {
   clauses?: LegalClause[];
   legal_intelligence?: LegalIntelligenceResult;
   special_clauses: string[];
+  /** True when the compact-output clause cap trimmed content; set deterministically, never by the model. */
+  additional_clauses_available?: boolean;
   risks: LegalRisk[];
   warnings: string[];
   field_confidence: FieldConfidence;
@@ -248,6 +250,7 @@ Return the canonical schema exactly. It has document, confidence, tenant, landlo
 Each risk must include a stable snake_case code, severity, category, evidence-based reason, and practical recommendation.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction. Score confidence per contact and per notable field independently: use 0.9 to 1 only when the value is stated in clear, unambiguous wording with a direct source excerpt; use 0.5 to 0.89 when the value is present but requires interpretation, appears only once, or is stated in an unusual format; use below 0.5 when the value is inferred from weak or indirect evidence. Do not assign a high confidence value to a field that is blank or was not found in the document.
+Keep the output compact so it always completes within the response limit. Every string must be concise. Never quote full clause text: summarize each material special clause as one plain statement of at most 300 characters. Every source_excerpt must be a short direct quote of at most 120 characters. Return at most 20 special clauses, 25 contacts, 40 inventory items, and 15 risks; when more special clauses exist, keep the most material ones and combine the remainder into the final clause entry as one short summary. Do not repeat the same fact in more than one section, and do not add explanations outside the schema fields.
 Return only the requested JSON schema.`;
 
 export class TenancyExtractionError extends Error {
@@ -802,7 +805,7 @@ async function requestStructuredExtraction(input: {
       schema: canonicalTenancyExtractionSchema,
       system: extractionInstructions,
       prompt: input.prompt,
-      maxOutputTokens: input.maxOutputTokens ?? 12_000,
+      maxOutputTokens: input.maxOutputTokens ?? 16_000,
       timeoutMs: input.timeoutMs,
       retryTimeoutMs: input.retryTimeoutMs,
       maxAttempts: input.maxAttempts,
@@ -860,6 +863,7 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
     clause_coverage: source.clause_coverage,
     legal: source.legal,
     special_clauses: source.clauses,
+    additional_clauses_available: source.additional_clauses_available === true,
     risks: source.risks.map((risk) => ({ ...risk, source_page: null, source_excerpt: '' })),
     warnings: source.warnings,
     field_confidence,
@@ -988,6 +992,7 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
     clauses: (Array.isArray(source.clauses) ? source.clauses : []).map((item) => normalizeClause(item)).filter((item): item is LegalClause => item !== null),
     legal_intelligence: source.legal_intelligence ?? { version: 'sprint-015-v1', executive_summary: '', normalized_fields: {}, clauses: [], risks: [] },
     special_clauses: uniqueStrings(source.special_clauses ?? []).map(normalizePercentages),
+    additional_clauses_available: source.additional_clauses_available === true,
     risks: uniqueRisks(source.risks ?? []),
     warnings: uniqueStrings(source.warnings ?? []),
     field_confidence: normalizeFieldConfidence(source.field_confidence, source),

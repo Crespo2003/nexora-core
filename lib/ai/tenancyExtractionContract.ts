@@ -121,6 +121,8 @@ export type CanonicalTenancyExtraction = {
   clauses: string[];
   risks: CanonicalTenancyRisk[];
   warnings: string[];
+  /** Set deterministically (never by the model) when the compact-output clause cap trimmed content. */
+  additional_clauses_available?: boolean;
 };
 
 export type OpenAiResponseDiagnostics = {
@@ -149,6 +151,22 @@ export class OpenAiTenancyResponseError extends OpenAiClientError {
 const string = { type: 'string' } as const;
 const nullableMoney = { type: ['number', 'null'], minimum: 0 } as const;
 const stringArray = { type: 'array', items: string } as const;
+
+/**
+ * Compact-output limits. The strict structured-output schema forces the model to emit every
+ * key, so uncapped arrays and long quotations are what push a single-call response past the
+ * output-token limit. The same limits are stated in the extraction prompt and enforced
+ * deterministically here, so a schema-valid response always stays within budget.
+ */
+export const extractionOutputLimits = Object.freeze({
+  specialClauses: 20,
+  specialClauseCharacters: 300,
+  contacts: 25,
+  inventoryItems: 40,
+  risks: 15,
+  warnings: 15,
+  excerptCharacters: 160
+});
 const party = {
   type: 'object', additionalProperties: false,
   required: ['name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'mobile', 'office_phone', 'additional_phones', 'email', 'additional_emails', 'correspondence_address'],
@@ -462,7 +480,7 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
     confidence: normalizeConfidence(source.confidence),
     tenant: tenant as CanonicalTenancyExtraction['tenant'],
     landlord: landlord as CanonicalTenancyExtraction['landlord'],
-    contacts,
+    contacts: contacts.slice(0, extractionOutputLimits.contacts),
     property: property as CanonicalTenancyExtraction['property'],
     financial,
     deposit_details: depositDetails,
@@ -471,12 +489,25 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
     payment,
     utilities: utilities as CanonicalTenancyExtraction['utilities'],
     parking: parking as CanonicalTenancyExtraction['parking'],
-    inventory,
+    inventory: { ...inventory, items: inventory.items.slice(0, extractionOutputLimits.inventoryItems) },
     clause_coverage: clauseCoverage,
     legal,
-    clauses: normalizeStringArray(source.clauses),
-    risks: normalizeRisks(source.risks),
-    warnings: normalizeStringArray(source.warnings)
+    ...compactClausesAndWarnings(source)
+  };
+}
+
+/** Deterministic compact-output enforcement for the clause, risk, and warning arrays. */
+function compactClausesAndWarnings(source: Record<string, unknown>): Pick<CanonicalTenancyExtraction, 'clauses' | 'risks' | 'warnings' | 'additional_clauses_available'> {
+  const allClauses = normalizeStringArray(source.clauses).map((clause) => clause.slice(0, extractionOutputLimits.specialClauseCharacters));
+  const clausesTrimmed = allClauses.length > extractionOutputLimits.specialClauses;
+  const warnings = normalizeStringArray(source.warnings).slice(0, extractionOutputLimits.warnings);
+  return {
+    clauses: allClauses.slice(0, extractionOutputLimits.specialClauses),
+    risks: normalizeRisks(source.risks).slice(0, extractionOutputLimits.risks),
+    warnings: clausesTrimmed
+      ? [...warnings, 'Additional special clauses beyond the compact output cap were summarized; review the source document for the full list.']
+      : warnings,
+    additional_clauses_available: clausesTrimmed
   };
 }
 
@@ -592,7 +623,7 @@ function normalizeContacts(value: unknown): CanonicalTenancyContact[] {
         ? represents as CanonicalTenancyContact['represents'] : 'unknown',
       ...party,
       source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
-      source_excerpt: normalizeText(source.source_excerpt).slice(0, 500),
+      source_excerpt: normalizeText(source.source_excerpt).slice(0, extractionOutputLimits.excerptCharacters),
       confidence: normalizeConfidence(source.confidence)
     }];
   });
@@ -637,7 +668,7 @@ function normalizeDepositEvidence(value: unknown, fallbackAmount: number | null)
     basis: amount === null ? 'not_found' : basis,
     rental_multiple: Number.isFinite(rentalMultiple) && rentalMultiple >= 0 ? rentalMultiple : null,
     source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
-    source_excerpt: normalizeText(source.source_excerpt).slice(0, 500),
+    source_excerpt: normalizeText(source.source_excerpt).slice(0, extractionOutputLimits.excerptCharacters),
     confidence: normalizeConfidence(source.confidence),
     requires_review: source.requires_review === true
   };
@@ -660,7 +691,7 @@ function normalizeNoticeDetails(value: unknown, fallbackNoticePeriod: string): C
       notice_type: type as typeof validOther[number],
       period: normalizeText(itemSource.period),
       source_page: Number.isInteger(page) && page > 0 ? page : null,
-      source_excerpt: normalizeText(itemSource.source_excerpt).slice(0, 500),
+      source_excerpt: normalizeText(itemSource.source_excerpt).slice(0, extractionOutputLimits.excerptCharacters),
       confidence: normalizeConfidence(itemSource.confidence)
     }];
   }) : [];
@@ -669,7 +700,7 @@ function normalizeNoticeDetails(value: unknown, fallbackNoticePeriod: string): C
     notice_type: validPrimary.includes(noticeType as typeof validPrimary[number]) ? noticeType as typeof validPrimary[number] : period ? 'termination' : '',
     other_notice_periods: other,
     source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
-    source_excerpt: normalizeText(source.source_excerpt).slice(0, 500),
+    source_excerpt: normalizeText(source.source_excerpt).slice(0, extractionOutputLimits.excerptCharacters),
     confidence: normalizeConfidence(source.confidence)
   };
 }
