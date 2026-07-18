@@ -3,7 +3,8 @@ import test from 'node:test';
 import { applyRiskEngine, enrichExtractedTenancyTerms, mapCanonicalTenancyExtraction, type TenancyLegalIntelligence } from '../lib/ai/extractTenancy';
 import { normalizeCanonicalTenancyExtraction } from '../lib/ai/tenancyExtractionContract';
 import { extractedTenancyContacts, syncExtractedTenancyContacts, type ContactSyncClient } from '../lib/contacts/syncTenancyContacts';
-import { mapTenancyExtractionToForm } from '../lib/tenancy/mapTenancyExtractionToForm';
+import { mapTenancyExtractionToForm, mergeMappedFormPreservingEdits } from '../lib/tenancy/mapTenancyExtractionToForm';
+import { extractTenancyDeterministically } from '../lib/tenancy/deterministicParser';
 
 function baseExtraction(financial: Partial<TenancyLegalIntelligence['financial']> = {}): TenancyLegalIntelligence {
   return {
@@ -33,7 +34,7 @@ test('preserves an explicit deposit and flags a conflicting stated rental multip
   const enriched = enrichExtractedTenancyTerms(baseExtraction({ security_deposit: 9500 }), raw);
   const reviewed = applyRiskEngine(enriched, raw);
   assert.equal(reviewed.financial.security_deposit, 9500);
-  assert.ok(reviewed.risks.some((risk) => risk.code === 'security_deposit_mismatch' && /Requires Review/.test(risk.reason) && risk.source_page === 2));
+  assert.ok(reviewed.risks.some((risk) => risk.code === 'security_deposit_mismatch' && /Requires confirmation/.test(risk.reason) && risk.source_page === 2));
 });
 
 test('normalizes detailed Malaysian agreement intelligence without retaining labels in identity values', () => {
@@ -134,4 +135,107 @@ test('maps structured agreement intelligence into the existing tenancy fields wi
   assert.equal(mapped.witnesses, 'Witness One');
   assert.equal(mapped.inventory, 'Bed\nFridge');
   assert.equal(mapped.latePayment, '8% per annum');
+});
+
+test('keeps unknown deposits null rather than converting them to zero', () => {
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), '--- PAGE 1 ---\nMonthly Rental: RM 4,800.00');
+  assert.equal(enriched.financial.security_deposit, null);
+  assert.equal(enriched.deposit_details?.security_deposit.basis, 'not_found');
+  assert.equal(mapTenancyExtractionToForm({ legalIntelligence: enriched }).securityDeposit, '');
+});
+
+test('retains a confirmed explicit zero deposit with source evidence', () => {
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), '--- PAGE 1 ---\nMonthly Rental: RM 4,800.00\nSecurity Deposit: RM 0.00 (no security deposit required).');
+  assert.equal(enriched.financial.security_deposit, 0);
+  assert.equal(enriched.deposit_details?.security_deposit.basis, 'explicit_amount');
+  assert.equal(mapTenancyExtractionToForm({ legalIntelligence: enriched }).securityDeposit, 0);
+});
+
+test('extracts non-renewal notice as the primary notice period', () => {
+  const raw = '--- PAGE 3 ---\nEither party must give not less than Two (2) months prior written notice before expiry if it does not intend to renew.';
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), raw);
+  assert.equal(enriched.tenancy.notice_period, '2 months');
+  assert.equal(enriched.notice_details?.notice_type, 'non_renewal');
+});
+
+test('keeps early termination notice separate from the ordinary notice period', () => {
+  const raw = '--- PAGE 3 ---\nThe tenant may terminate early by giving sixty days written notice.';
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), raw);
+  assert.equal(enriched.tenancy.notice_period, '');
+  assert.deepEqual(enriched.notice_details?.other_notice_periods.map((item) => [item.notice_type, item.period]), [['early_termination', '60 days']]);
+});
+
+test('keeps viewing notice separate from the ordinary notice period', () => {
+  const raw = '--- PAGE 4 ---\nThe landlord may inspect the premises after giving 24 hours notice.';
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), raw);
+  assert.equal(enriched.tenancy.notice_period, '');
+  assert.deepEqual(enriched.notice_details?.other_notice_periods.map((item) => [item.notice_type, item.period]), [['viewing', '24 hours']]);
+});
+
+test('extracts tenant and landlord phone and email from party particulars', () => {
+  const raw = `--- PAGE 1 ---
+Tenant: Aisha Tenant
+Phone: 012-345 6789
+Email: AISHA@EXAMPLE.COM
+Landlord: Lim Owner
+Tel: 03-1234 5678
+E-mail: OWNER@EXAMPLE.COM`;
+  const enriched = enrichExtractedTenancyTerms({
+    ...baseExtraction({ monthly_rental: 4800 }),
+    tenant: { ...baseExtraction().tenant, phone: '', email: '' },
+    landlord: { ...baseExtraction().landlord, phone: '', email: '' }
+  }, raw);
+  assert.equal(enriched.tenant.phone, '+60123456789');
+  assert.equal(enriched.tenant.email, 'aisha@example.com');
+  assert.equal(enriched.landlord.phone, '+60312345678');
+  assert.equal(enriched.landlord.email, 'owner@example.com');
+});
+
+test('does not classify a witness as an agent without supporting agent evidence', () => {
+  const canonical = normalizeCanonicalTenancyExtraction({
+    document: {}, confidence: 0.9, tenant: {}, landlord: {}, property: {}, financial: {}, tenancy: {}, payment: {}, utilities: {}, parking: {}, inventory: {}, clause_coverage: {}, legal: {}, clauses: [], risks: [], warnings: [],
+    contacts: [{ role: 'agent', represents: 'landlord', name: 'Witness One', source_excerpt: 'Witness: Witness One', source_page: 4, confidence: 0.9 }]
+  });
+  assert.equal(mapCanonicalTenancyExtraction(canonical).contacts?.[0].role, 'witness');
+});
+
+test('retains an REN-backed witness as an agent when the agreement supports it', () => {
+  const canonical = normalizeCanonicalTenancyExtraction({
+    document: {}, confidence: 0.9, tenant: {}, landlord: {}, property: {}, financial: {}, tenancy: {}, payment: {}, utilities: {}, parking: {}, inventory: {}, clause_coverage: {}, legal: {}, clauses: [], risks: [], warnings: [],
+    contacts: [{ role: 'agent', represents: 'landlord', name: 'Agent One', ren_number: 'REN 12345', source_excerpt: 'Witness and negotiator REN 12345', source_page: 4, confidence: 0.9 }]
+  });
+  const contact = mapCanonicalTenancyExtraction(canonical).contacts?.[0];
+  assert.equal(contact?.role, 'agent');
+  assert.equal(contact?.ren_number, '12345');
+});
+
+test('does not mistake passport or bank-account values for phone numbers', () => {
+  const raw = '--- PAGE 1 ---\nTenant: Aisha Tenant\nPassport No: A123456789\nBank Account No: 123456789012\nLandlord: Lim Owner\nPassport No: B987654321';
+  const enriched = enrichExtractedTenancyTerms({
+    ...baseExtraction({ monthly_rental: 4800 }),
+    tenant: { ...baseExtraction().tenant, phone: '' }, landlord: { ...baseExtraction().landlord, phone: '' }
+  }, raw);
+  assert.equal(enriched.tenant.phone, '');
+  assert.equal(enriched.landlord.phone, '');
+});
+
+test('preserves manual form edits when a new extraction is reviewed', () => {
+  const current = mapTenancyExtractionToForm({ legalIntelligence: baseExtraction({ security_deposit: 7000 }) });
+  const incoming = mapTenancyExtractionToForm({ legalIntelligence: baseExtraction({ security_deposit: 9600 }) });
+  const merged = mergeMappedFormPreservingEdits({ ...current, securityDeposit: 7777 }, incoming, new Set(['securityDeposit']));
+  assert.equal(merged.securityDeposit, 7777);
+});
+
+test('keeps working tenancy fields intact while enriching deposits and notices', () => {
+  const enriched = enrichExtractedTenancyTerms(baseExtraction(), '--- PAGE 1 ---\nMonthly Rental: RM 4,800.00\nSecurity Deposit: Two months rental.\nTermination: two months notice.');
+  assert.equal(enriched.tenant.name, 'AN XIN');
+  assert.equal(enriched.property.unit, '12-05');
+  assert.equal(enriched.financial.monthly_rental, 4800);
+  assert.equal(enriched.financial.security_deposit, 9600);
+});
+
+test('keeps the deterministic upload fallback functional with null unknown deposits', () => {
+  const result = extractTenancyDeterministically(`TENANCY AGREEMENT\nTenant: Test Tenant\nLandlord: Test Owner\nMonthly rental: RM 2,500\n${'Terms. '.repeat(20)}`, 'agreement.txt', 'text/plain', 'openai_timeout', true);
+  assert.equal(result.document.extractionStatus, 'ready');
+  assert.equal(result.legalIntelligence.financial.security_deposit, null);
 });

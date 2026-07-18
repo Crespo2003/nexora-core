@@ -148,7 +148,7 @@ function toLegacyExtraction(
 ): TenancyExtraction {
   const legal = result.extraction;
   const confidence = confidenceLevel(legal.confidence);
-  const field = (value: string | number, path: string, missingConfidence: Confidence = 'low'): ExtractedField => ({
+  const field = (value: string | number | null | undefined, path: string, missingConfidence: Confidence = 'low'): ExtractedField => ({
     value: String(value ?? ''),
     confidence: String(value ?? '').trim() ? confidenceLevel((legal.field_confidence[path] ?? legal.confidence * 100) / 100) : missingConfidence
   });

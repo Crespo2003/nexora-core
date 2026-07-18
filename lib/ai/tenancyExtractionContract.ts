@@ -22,6 +22,32 @@ export type CanonicalTenancyParty = {
 export type CanonicalTenancyContact = CanonicalTenancyParty & {
   role: 'tenant' | 'landlord' | 'witness' | 'agent' | 'law_firm';
   represents: 'tenant' | 'landlord' | 'both' | 'neutral' | 'unknown';
+  ren_number: string;
+  source_page: number | null;
+  source_excerpt: string;
+  confidence: number;
+};
+
+export type CanonicalDepositEvidence = {
+  amount: number | null;
+  basis: 'explicit_amount' | 'rental_multiple' | 'not_found';
+  rental_multiple: number | null;
+  source_page: number | null;
+  source_excerpt: string;
+  confidence: number;
+  requires_review: boolean;
+};
+
+export type CanonicalNoticePeriod = {
+  primary_notice_period: string;
+  notice_type: 'non_renewal' | 'termination' | '';
+  other_notice_periods: Array<{
+    notice_type: 'early_termination' | 'default_cure' | 'viewing' | 'rent_review' | 'renewal_exercise' | 'vacant_possession';
+    period: string;
+    source_page: number | null;
+    source_excerpt: string;
+    confidence: number;
+  }>;
   source_page: number | null;
   source_excerpt: string;
   confidence: number;
@@ -51,10 +77,20 @@ export type CanonicalTenancyExtraction = {
     booking_fee: number | null;
     stamp_duty: number | null;
   };
+  deposit_details: {
+    security_deposit: CanonicalDepositEvidence;
+    utility_deposit: CanonicalDepositEvidence;
+    access_card_deposit: CanonicalDepositEvidence;
+    car_park_deposit: CanonicalDepositEvidence;
+    key_deposit: CanonicalDepositEvidence;
+    renovation_deposit: CanonicalDepositEvidence;
+    other_deposits: Array<CanonicalDepositEvidence & { label: string }>;
+  };
   tenancy: {
     commencement_date: string; expiry_date: string; renewal_option: string; renewal_period: string; automatic_renewal: string;
     notice_period: string; payment_due_day: string | null;
   };
+  notice_details: CanonicalNoticePeriod;
   payment: { method: string; bank_name: string; account_number: string; account_holder: string; late_payment_interest: string; grace_period: string };
   utilities: { tnb: string; water: string; iwk: string; wifi: string; aircond: string; maintenance_fee: string; quit_rent: string; assessment: string };
   parking: { bays: string; bay_numbers: string; access_cards: string; remote_controls: string; keys: string };
@@ -118,12 +154,46 @@ const party = {
 } as const;
 const contact = {
   type: 'object', additionalProperties: false,
-  required: ['role', 'represents', 'name', 'company', 'identification', 'identification_type', 'company_number', 'phone', 'email', 'correspondence_address', 'source_page', 'source_excerpt', 'confidence'],
+  required: ['role', 'represents', 'name', 'company', 'identification', 'identification_type', 'company_number', 'ren_number', 'phone', 'email', 'correspondence_address', 'source_page', 'source_excerpt', 'confidence'],
   properties: {
     role: { type: 'string', enum: ['tenant', 'landlord', 'witness', 'agent', 'law_firm'] },
     represents: { type: 'string', enum: ['tenant', 'landlord', 'both', 'neutral', 'unknown'] },
-    name: string, company: string, identification: string, identification_type: string, company_number: string,
+    name: string, company: string, identification: string, identification_type: string, company_number: string, ren_number: string,
     phone: string, email: string, correspondence_address: string,
+    source_page: { type: ['integer', 'null'], minimum: 1 }, source_excerpt: string,
+    confidence: { type: 'number', minimum: 0, maximum: 1 }
+  }
+} as const;
+const depositEvidence = {
+  type: 'object', additionalProperties: false,
+  required: ['amount', 'basis', 'rental_multiple', 'source_page', 'source_excerpt', 'confidence', 'requires_review'],
+  properties: {
+    amount: nullableMoney,
+    basis: { type: 'string', enum: ['explicit_amount', 'rental_multiple', 'not_found'] },
+    rental_multiple: { type: ['number', 'null'], minimum: 0 },
+    source_page: { type: ['integer', 'null'], minimum: 1 },
+    source_excerpt: string,
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    requires_review: { type: 'boolean' }
+  }
+} as const;
+const noticePeriod = {
+  type: 'object', additionalProperties: false,
+  required: ['notice_type', 'period', 'source_page', 'source_excerpt', 'confidence'],
+  properties: {
+    notice_type: { type: 'string', enum: ['early_termination', 'default_cure', 'viewing', 'rent_review', 'renewal_exercise', 'vacant_possession'] },
+    period: string,
+    source_page: { type: ['integer', 'null'], minimum: 1 }, source_excerpt: string,
+    confidence: { type: 'number', minimum: 0, maximum: 1 }
+  }
+} as const;
+const noticeDetails = {
+  type: 'object', additionalProperties: false,
+  required: ['primary_notice_period', 'notice_type', 'other_notice_periods', 'source_page', 'source_excerpt', 'confidence'],
+  properties: {
+    primary_notice_period: string,
+    notice_type: { type: 'string', enum: ['non_renewal', 'termination', ''] },
+    other_notice_periods: { type: 'array', items: noticePeriod },
     source_page: { type: ['integer', 'null'], minimum: 1 }, source_excerpt: string,
     confidence: { type: 'number', minimum: 0, maximum: 1 }
   }
@@ -152,7 +222,7 @@ const risk = {
 export const canonicalTenancyExtractionSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['document', 'confidence', 'tenant', 'landlord', 'contacts', 'property', 'financial', 'tenancy', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage', 'legal', 'clauses', 'risks', 'warnings'],
+  required: ['document', 'confidence', 'tenant', 'landlord', 'contacts', 'property', 'financial', 'deposit_details', 'tenancy', 'notice_details', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage', 'legal', 'clauses', 'risks', 'warnings'],
   properties: {
     document: {
       type: 'object', additionalProperties: false,
@@ -180,6 +250,22 @@ export const canonicalTenancyExtractionSchema = {
         booking_fee: nullableMoney, stamp_duty: nullableMoney
       }
     },
+    deposit_details: {
+      type: 'object', additionalProperties: false,
+      required: ['security_deposit', 'utility_deposit', 'access_card_deposit', 'car_park_deposit', 'key_deposit', 'renovation_deposit', 'other_deposits'],
+      properties: {
+        security_deposit: depositEvidence, utility_deposit: depositEvidence, access_card_deposit: depositEvidence,
+        car_park_deposit: depositEvidence, key_deposit: depositEvidence, renovation_deposit: depositEvidence,
+        other_deposits: {
+          type: 'array',
+          items: {
+            type: 'object', additionalProperties: false,
+            required: ['label', 'amount', 'basis', 'rental_multiple', 'source_page', 'source_excerpt', 'confidence', 'requires_review'],
+            properties: { label: string, ...depositEvidence.properties }
+          }
+        }
+      }
+    },
     tenancy: {
       type: 'object', additionalProperties: false,
       required: ['commencement_date', 'expiry_date', 'renewal_option', 'renewal_period', 'automatic_renewal', 'notice_period', 'payment_due_day'],
@@ -188,6 +274,7 @@ export const canonicalTenancyExtractionSchema = {
         notice_period: string, payment_due_day: { type: ['string', 'null'] }
       }
     },
+    notice_details: noticeDetails,
     payment: {
       type: 'object', additionalProperties: false,
       required: ['method', 'bank_name', 'account_number', 'account_holder', 'late_payment_interest', 'grace_period'],
@@ -346,6 +433,9 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
     booking_fee: normalizeMoney(financialSource.booking_fee, monthlyRental),
     stamp_duty: normalizeMoney(financialSource.stamp_duty, monthlyRental)
   };
+  const depositDetails = normalizeDepositDetails(source.deposit_details, financial);
+  const noticeDetails = normalizeNoticeDetails(source.notice_details, tenancy.notice_period);
+  if (noticeDetails.primary_notice_period) tenancy.notice_period = noticeDetails.primary_notice_period;
 
   return {
     document: document as CanonicalTenancyExtraction['document'],
@@ -355,7 +445,9 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
     contacts,
     property: property as CanonicalTenancyExtraction['property'],
     financial,
+    deposit_details: depositDetails,
     tenancy,
+    notice_details: noticeDetails,
     payment,
     utilities: utilities as CanonicalTenancyExtraction['utilities'],
     parking: parking as CanonicalTenancyExtraction['parking'],
@@ -371,7 +463,7 @@ export function normalizeCanonicalTenancyExtraction(value: unknown): CanonicalTe
 /** Removes document labels while retaining the actual NRIC, passport, or registration value. */
 export function normalizeIdentification(value: unknown): string {
   return normalizeText(value)
-    .replace(/^(?:(?:nric|ic|passport|company|registration)\s*(?:no|number)?|name|date)\s*[:#-]?\s*/i, '')
+    .replace(/^(?:(?:nric|ic|passport|company|registration|ren)\s*(?:no|number)?|name|date)\s*[:#-]?\s*/i, '')
     .trim();
 }
 
@@ -412,6 +504,7 @@ function normalizeContacts(value: unknown): CanonicalTenancyContact[] {
       identification: normalizeIdentification(source.identification),
       identification_type: normalizeText(source.identification_type),
       company_number: normalizeIdentification(source.company_number),
+      ren_number: normalizeIdentification(source.ren_number),
       phone: normalizeText(source.phone),
       email: normalizeText(source.email).toLowerCase(),
       correspondence_address: normalizeLabelledValue(source.correspondence_address)
@@ -428,6 +521,82 @@ function normalizeContacts(value: unknown): CanonicalTenancyContact[] {
       confidence: normalizeConfidence(source.confidence)
     }];
   });
+}
+
+function normalizeDepositDetails(
+  value: unknown,
+  financial: CanonicalTenancyExtraction['financial']
+): CanonicalTenancyExtraction['deposit_details'] {
+  const source = asObject(value) ?? {};
+  const named = (key: 'security_deposit' | 'utility_deposit' | 'access_card_deposit' | 'car_park_deposit') =>
+    normalizeDepositEvidence(source[key], financial[key]);
+  const other = Array.isArray(source.other_deposits) ? source.other_deposits.flatMap((item) => {
+    const itemSource = asObject(item);
+    if (!itemSource) return [];
+    const detail = normalizeDepositEvidence(itemSource, null);
+    const label = normalizeLabelledValue(itemSource.label);
+    return label ? [{ ...detail, label }] : [];
+  }) : [];
+  return {
+    security_deposit: named('security_deposit'),
+    utility_deposit: named('utility_deposit'),
+    access_card_deposit: named('access_card_deposit'),
+    car_park_deposit: named('car_park_deposit'),
+    key_deposit: normalizeDepositEvidence(source.key_deposit, null),
+    renovation_deposit: normalizeDepositEvidence(source.renovation_deposit, null),
+    other_deposits: other.length ? other : []
+  };
+}
+
+function normalizeDepositEvidence(value: unknown, fallbackAmount: number | null): CanonicalDepositEvidence {
+  const source = asObject(value) ?? {};
+  const amount = normalizeMoney(source.amount ?? fallbackAmount);
+  const requestedBasis = normalizeText(source.basis).toLowerCase();
+  const basis = requestedBasis === 'explicit_amount' || requestedBasis === 'rental_multiple' || requestedBasis === 'not_found'
+    ? requestedBasis : amount === null ? 'not_found' : 'explicit_amount';
+  const rawMultiple = source.rental_multiple;
+  const rentalMultiple = rawMultiple === null || rawMultiple === undefined || rawMultiple === '' ? null : Number(rawMultiple);
+  const sourcePage = Number(source.source_page);
+  return {
+    amount,
+    basis: amount === null ? 'not_found' : basis,
+    rental_multiple: Number.isFinite(rentalMultiple) && rentalMultiple >= 0 ? rentalMultiple : null,
+    source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
+    source_excerpt: normalizeText(source.source_excerpt).slice(0, 500),
+    confidence: normalizeConfidence(source.confidence),
+    requires_review: source.requires_review === true
+  };
+}
+
+function normalizeNoticeDetails(value: unknown, fallbackNoticePeriod: string): CanonicalNoticePeriod {
+  const source = asObject(value) ?? {};
+  const validPrimary = ['non_renewal', 'termination'] as const;
+  const validOther = ['early_termination', 'default_cure', 'viewing', 'rent_review', 'renewal_exercise', 'vacant_possession'] as const;
+  const sourcePage = Number(source.source_page);
+  const period = normalizeText(source.primary_notice_period || fallbackNoticePeriod);
+  const noticeType = normalizeText(source.notice_type).toLowerCase();
+  const other = Array.isArray(source.other_notice_periods) ? source.other_notice_periods.flatMap((item) => {
+    const itemSource = asObject(item);
+    if (!itemSource) return [];
+    const type = normalizeText(itemSource.notice_type).toLowerCase();
+    const page = Number(itemSource.source_page);
+    if (!validOther.includes(type as typeof validOther[number])) return [];
+    return [{
+      notice_type: type as typeof validOther[number],
+      period: normalizeText(itemSource.period),
+      source_page: Number.isInteger(page) && page > 0 ? page : null,
+      source_excerpt: normalizeText(itemSource.source_excerpt).slice(0, 500),
+      confidence: normalizeConfidence(itemSource.confidence)
+    }];
+  }) : [];
+  return {
+    primary_notice_period: period,
+    notice_type: validPrimary.includes(noticeType as typeof validPrimary[number]) ? noticeType as typeof validPrimary[number] : period ? 'termination' : '',
+    other_notice_periods: other,
+    source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
+    source_excerpt: normalizeText(source.source_excerpt).slice(0, 500),
+    confidence: normalizeConfidence(source.confidence)
+  };
 }
 
 function normalizePayment(value: Record<string, unknown>): CanonicalTenancyExtraction['payment'] {
@@ -448,7 +617,7 @@ function normalizeClauseCoverage(value: Record<string, unknown>): CanonicalTenan
 
 export function validateCanonicalTenancyExtraction(value: CanonicalTenancyExtraction): string[] {
   const issues: string[] = [];
-  const objectPaths = ['document', 'tenant', 'landlord', 'property', 'financial', 'tenancy', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage', 'legal'] as const;
+  const objectPaths = ['document', 'tenant', 'landlord', 'property', 'financial', 'deposit_details', 'tenancy', 'notice_details', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage', 'legal'] as const;
   for (const path of objectPaths) if (!value[path] || typeof value[path] !== 'object') issues.push(path);
   if (!Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1) issues.push('confidence');
   for (const [key, amount] of Object.entries(value.financial)) {
@@ -456,6 +625,8 @@ export function validateCanonicalTenancyExtraction(value: CanonicalTenancyExtrac
   }
   if (!Array.isArray(value.clauses)) issues.push('clauses');
   if (!Array.isArray(value.contacts)) issues.push('contacts');
+  if (!Array.isArray(value.deposit_details.other_deposits)) issues.push('deposit_details.other_deposits');
+  if (!Array.isArray(value.notice_details.other_notice_periods)) issues.push('notice_details.other_notice_periods');
   if (!Array.isArray(value.risks)) issues.push('risks');
   if (!Array.isArray(value.warnings)) issues.push('warnings');
   for (const [index, item] of value.risks.entries()) {

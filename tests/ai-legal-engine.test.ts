@@ -37,8 +37,8 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
-    'document', 'confidence', 'tenant', 'landlord', 'contacts', 'property', 'financial',
-    'tenancy', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage',
+    'document', 'confidence', 'tenant', 'landlord', 'contacts', 'property', 'financial', 'deposit_details',
+    'tenancy', 'notice_details', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage',
     'legal', 'clauses', 'risks', 'warnings'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);

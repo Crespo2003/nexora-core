@@ -89,6 +89,7 @@ export function mapTenancyExtractionToForm(
   const legal = record(root.legalIntelligence ?? root.extraction ?? root);
   const fieldConfidence = numericRecord(read(legal, 'field_confidence'));
   const sourceReferences = record(read(legal, 'field_evidence'));
+  const depositDetails = record(read(legal, 'deposit_details'));
   const monthlyRental = normalizeExtractedMoney(
     read(legal, 'financial.monthly_rental') ?? read(root, 'financial.monthlyRental'),
     '',
@@ -129,10 +130,10 @@ export function mapTenancyExtractionToForm(
     landArea: value(read(legal, 'property.land_area')),
     carParks: value(read(legal, 'property.car_parks')) || value(read(legal, 'parking.bays')),
     monthlyRental,
-    securityDeposit: normalizeExtractedMoney(read(legal, 'financial.security_deposit') ?? read(root, 'financial.securityDeposit'), monthlyRental, 'financial.security_deposit', fieldConfidence, sourceReferences),
-    generalUtilityDeposit: normalizeExtractedMoney(read(legal, 'financial.utility_deposit') ?? read(root, 'financial.utilityDeposit'), monthlyRental, 'financial.utility_deposit', fieldConfidence, sourceReferences),
-    accessCardDeposit: normalizeExtractedMoney(read(legal, 'financial.access_card_deposit') ?? read(root, 'financial.accessCardDeposit'), monthlyRental, 'financial.access_card_deposit', fieldConfidence, sourceReferences),
-    carParkRemoteDeposit: normalizeExtractedMoney(read(legal, 'financial.car_park_deposit') ?? read(root, 'financial.carParkRemoteDeposit'), monthlyRental, 'financial.car_park_deposit', fieldConfidence, sourceReferences),
+    securityDeposit: normalizeExtractedMoney(read(legal, 'financial.security_deposit') ?? read(root, 'financial.securityDeposit'), monthlyRental, 'financial.security_deposit', fieldConfidence, sourceReferences, record(depositDetails.security_deposit)),
+    generalUtilityDeposit: normalizeExtractedMoney(read(legal, 'financial.utility_deposit') ?? read(root, 'financial.utilityDeposit'), monthlyRental, 'financial.utility_deposit', fieldConfidence, sourceReferences, record(depositDetails.utility_deposit)),
+    accessCardDeposit: normalizeExtractedMoney(read(legal, 'financial.access_card_deposit') ?? read(root, 'financial.accessCardDeposit'), monthlyRental, 'financial.access_card_deposit', fieldConfidence, sourceReferences, record(depositDetails.access_card_deposit)),
+    carParkRemoteDeposit: normalizeExtractedMoney(read(legal, 'financial.car_park_deposit') ?? read(root, 'financial.carParkRemoteDeposit'), monthlyRental, 'financial.car_park_deposit', fieldConfidence, sourceReferences, record(depositDetails.car_park_deposit)),
     stampDuty: normalizeExtractedMoney(read(legal, 'financial.stamp_duty'), monthlyRental, 'financial.stamp_duty', fieldConfidence, sourceReferences),
     commencementDate: normalizeDateForInput(value(read(legal, 'tenancy.commencement_date') ?? read(root, 'dates.commencementDate'))),
     expiryDate: normalizeDateForInput(value(read(legal, 'tenancy.expiry_date') ?? read(root, 'dates.expiryDate'))),
@@ -202,13 +203,17 @@ function normalizeExtractedMoney(
   monthlyRental: MappedMoney,
   path: string,
   fieldConfidence: Record<string, number>,
-  sourceReferences: Record<string, unknown>
+  sourceReferences: Record<string, unknown>,
+  depositDetail: Record<string, unknown> = {}
 ): MappedMoney {
   const raw = value(input);
   const evidence = record(sourceReferences[path]);
   const evidenceValue = value(evidence.value);
   const confidence = Number(evidence.confidence ?? fieldConfidence[path] ?? 0);
-  if (/^0(?:\.0+)?$/.test(raw) && !evidenceValue && (!Number.isFinite(confidence) || confidence <= 0)) return '';
+  const explicitZero = text(depositDetail.basis) === 'explicit_amount' && /^0(?:\.0+)?$/.test(value(depositDetail.amount));
+  const evidencedZero = /^0(?:\.0+)?$/.test(evidenceValue) && Boolean(text(evidence.source_excerpt));
+  if (/^0(?:\.0+)?$/.test(raw) && !explicitZero && !evidencedZero) return '';
+  if (/^0(?:\.0+)?$/.test(raw) && !evidenceValue && (!Number.isFinite(confidence) || confidence <= 0) && !explicitZero) return '';
   return normalizeMoney(input, monthlyRental);
 }
 

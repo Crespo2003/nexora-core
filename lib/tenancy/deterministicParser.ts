@@ -129,13 +129,16 @@ function toLegalIntelligence(
 ): TenancyLegalIntelligence {
   const pct = (field: ExtractedField) => field.value ? field.confidence === 'high' ? 90 : field.confidence === 'medium' ? 70 : 40 : 0;
   const iso = (field: ExtractedField) => displayDateToIso(field.value) ?? '';
-  const number = (field: ExtractedField) => Number(field.value) || 0;
+  const number = (field: ExtractedField) => {
+    const value = Number(field.value);
+    return field.value.trim() && Number.isFinite(value) && value >= 0 ? value : null;
+  };
   return {
     document_type: property.propertyType.value, confidence: overall === 'high' ? 0.85 : overall === 'medium' ? 0.65 : 0.35,
     tenant: { name: tenant.name.value, company: '', ic_passport: tenant.idNo.value, phone: tenant.phone.value, email: tenant.email.value },
     landlord: { name: landlord.name.value, company: '', ic_passport: landlord.idNo.value, phone: landlord.phone.value, email: landlord.email.value },
     property: { name: property.propertyName.value, unit: property.unitNo.value, address: property.fullAddress.value, type: property.propertyType.value, build_up: '', land_area: '', car_parks: '' },
-    financial: { monthly_rental: number(financial.monthlyRental), security_deposit: number(financial.securityDeposit), utility_deposit: number(financial.utilityDeposit), access_card_deposit: number(financial.accessCardDeposit), car_park_deposit: number(financial.carParkRemoteDeposit), stamp_duty: 0 },
+    financial: { monthly_rental: number(financial.monthlyRental), security_deposit: number(financial.securityDeposit), utility_deposit: number(financial.utilityDeposit), access_card_deposit: number(financial.accessCardDeposit), car_park_deposit: number(financial.carParkRemoteDeposit), stamp_duty: null },
     tenancy: { commencement_date: iso(dates.commencementDate), expiry_date: iso(dates.expiryDate), renewal_option: dates.renewalOption.value, notice_period: dates.noticePeriod.value, payment_due_day: dates.rentalDueDay.value },
     utilities: { tnb: '', water: '', iwk: '', wifi: '' },
     legal: { signatures: '', witnesses: '', stamp_duty: '', inventory: '', restrictions: clauses.illegalActivityRestriction.value ? [clauses.illegalActivityRestriction.value] : [], late_payment: '', termination: clauses.terminationClause.value, viewing_rights: clauses.viewingClause.value, insurance: '', maintenance: clauses.otherObligations.value, access_card: '', car_park: '' },

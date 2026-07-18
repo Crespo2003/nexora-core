@@ -12,6 +12,7 @@ export type ExtractedContactCandidate = {
   identification: string;
   identificationType: string;
   companyNumber: string;
+  renNumber: string;
   phone: string;
   email: string;
   correspondenceAddress: string;
@@ -53,7 +54,7 @@ export function extractedTenancyContacts(value: unknown): ExtractedContactCandid
     const party = record(partyValue);
     return candidate({
       role, represents: role, name: party.name, company: party.company, identification: party.ic_passport ?? party.identification,
-      identification_type: party.identification_type, company_number: party.company_number, phone: party.phone, email: party.email,
+      identification_type: party.identification_type, company_number: party.company_number, ren_number: party.ren_number, phone: party.phone, email: party.email,
       correspondence_address: party.correspondence_address, source_page: null, source_excerpt: '', confidence: root.confidence
     });
   };
@@ -111,6 +112,7 @@ function candidate(value: unknown): ExtractedContactCandidate | null {
     role, represents: validRepresentation.has(representsValue) ? representsValue : 'unknown', name: normalizePersonName(source.name),
     company: text(source.company), identification: normalizeIdentification(source.identification ?? source.ic_passport),
     identificationType: text(source.identification_type), companyNumber: normalizeIdentification(source.company_number),
+    renNumber: normalizeIdentification(source.ren_number),
     phone: phone.normalized || text(source.phone), email: text(source.email).toLowerCase(), correspondenceAddress: text(source.correspondence_address),
     sourcePage: Number.isInteger(source.source_page) && Number(source.source_page) > 0 ? Number(source.source_page) : null,
     sourceExcerpt: text(source.source_excerpt).slice(0, 500), confidence: normalizeConfidence(source.confidence)
@@ -130,7 +132,7 @@ async function findOrCreateContact(supabase: ContactSyncClient, workspaceId: str
   const phone = normalizePhone(item.phone);
   const created = await supabase.from('contacts').insert({
     workspace_id: workspaceId, contact_type: item.company && !item.name ? 'company' : 'person', full_name: item.name,
-    company_name: item.company, identification_number: item.identification, registration_number: item.companyNumber,
+    company_name: item.company, identification_number: item.identification, registration_number: item.companyNumber, ren_number: item.renNumber,
     phone_original: item.phone, phone_normalized: phone.normalized || '', phone_country_code: phone.countryCode || '',
     whatsapp_number: phone.whatsappNumber || '', email: item.email, address: item.correspondenceAddress,
     raw_extracted_data: item

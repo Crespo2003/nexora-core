@@ -27,6 +27,32 @@ export type LegalParty = {
 export type ExtractedTenancyContact = LegalParty & {
   role: 'tenant' | 'landlord' | 'witness' | 'agent' | 'law_firm';
   represents: 'tenant' | 'landlord' | 'both' | 'neutral' | 'unknown';
+  ren_number?: string;
+  source_page: number | null;
+  source_excerpt: string;
+  confidence: number;
+};
+
+export type DepositEvidence = {
+  amount: number | null;
+  basis: 'explicit_amount' | 'rental_multiple' | 'not_found';
+  rental_multiple: number | null;
+  source_page: number | null;
+  source_excerpt: string;
+  confidence: number;
+  requires_review: boolean;
+};
+
+export type NoticePeriodDetails = {
+  primary_notice_period: string;
+  notice_type: 'non_renewal' | 'termination' | '';
+  other_notice_periods: Array<{
+    notice_type: 'early_termination' | 'default_cure' | 'viewing' | 'rent_review' | 'renewal_exercise' | 'vacant_possession';
+    period: string;
+    source_page: number | null;
+    source_excerpt: string;
+    confidence: number;
+  }>;
   source_page: number | null;
   source_excerpt: string;
   confidence: number;
@@ -73,14 +99,23 @@ export type TenancyLegalIntelligence = {
     car_parks: string;
   };
   financial: {
-    monthly_rental: number;
-    security_deposit: number;
-    utility_deposit: number;
-    access_card_deposit: number;
-    car_park_deposit: number;
-    holding_deposit?: number;
-    booking_fee?: number;
-    stamp_duty: number;
+    monthly_rental: number | null;
+    security_deposit: number | null;
+    utility_deposit: number | null;
+    access_card_deposit: number | null;
+    car_park_deposit: number | null;
+    holding_deposit?: number | null;
+    booking_fee?: number | null;
+    stamp_duty: number | null;
+  };
+  deposit_details?: {
+    security_deposit: DepositEvidence;
+    utility_deposit: DepositEvidence;
+    access_card_deposit: DepositEvidence;
+    car_park_deposit: DepositEvidence;
+    key_deposit: DepositEvidence;
+    renovation_deposit: DepositEvidence;
+    other_deposits: Array<DepositEvidence & { label: string }>;
   };
   tenancy: {
     commencement_date: string;
@@ -91,6 +126,7 @@ export type TenancyLegalIntelligence = {
     notice_period: string;
     payment_due_day: string;
   };
+  notice_details?: NoticePeriodDetails;
   utilities: {
     tnb: string;
     water: string;
@@ -183,10 +219,11 @@ Classify the premises as Residential, Commercial, Industrial, Office, Retail, Bu
 Normalize all Malaysian Ringgit values to plain non-negative numbers with no RM symbol or commas. Do not replace an explicit written amount with a calculated amount.
 Normalize complete dates to YYYY-MM-DD. Keep an empty string when a date is absent or ambiguous.
 Use empty strings, null money values, and empty arrays for facts that are not stated.
-Extract tenant, landlord, witness, agent, and law-firm contacts into contacts. Include every stated name, IC/passport, company registration number, phone, email, correspondence address, stated role, source page, concise source excerpt, and confidence. Keep the person/company identity value separate from its label.
+Extract tenant, landlord, witness, agent, and law-firm contacts into contacts from every page, signature block, schedule, annexure, agency stamp, payment instruction, and contact-information block. Include every stated name, IC/passport, company registration number, REN number, phone, email, correspondence address, stated role, source page, concise source excerpt, and confidence. Keep the person/company identity value separate from its label. Never treat an NRIC, passport, bank account, date, unit, or page number as a phone number. A witness remains a witness unless an REN number, agency name, negotiator title, agent wording, agency stamp, or matching agent contact evidence supports an agent role.
 For tenant and landlord, extract identification_type, company_number, and correspondence_address as well as the core particulars.
 Split the property into name, unit_number, street, postcode, city, state, country, and address. The address may retain the complete source address; never invent an address component.
-For security, utility, access-card, car-park, holding deposits and booking fee, first preserve an explicit monetary amount. When no amount is written but the agreement explicitly gives a rental multiple, calculate it from monthly_rental. Recognize two (2) months rental, two months' rental, one month rental, half month rental, 0.5 month rental, equal to, and equivalent to. Do not calculate when the agreement does not clearly state a rental multiple.
+For security, utility, access-card, car-park, key, renovation, holding deposits, booking fee and other deposits, first preserve an explicit monetary amount. When no amount is written but the agreement explicitly gives a rental multiple, calculate it from monthly_rental. Recognize two (2) months rental, two months' rental, one month rental, half month rental, 0.5 month rental, equal to, and equivalent to. Do not calculate when the agreement does not clearly state a rental multiple. Populate deposit_details for every deposit: amount (or null), basis, rental_multiple (or null), source_page, source_excerpt, confidence, and requires_review. Explicit amounts win; if they conflict with a stated rental multiple, preserve the amount and set requires_review true. Use null for unknown values and zero only when the agreement explicitly states no deposit is required.
+Separate notice_details into the main non-renewal or ordinary termination notice period and other notice types: early_termination, default_cure, viewing, rent_review, renewal_exercise, and vacant_possession. Never place viewing, breach-cure, or renewal-exercise notice in the primary Notice Period. If no valid non-renewal or ordinary termination notice exists, leave primary_notice_period and tenancy.notice_period blank.
 Extract payment method, bank name, account number, account holder, rental due day, late-payment interest, grace period, renewal period, automatic renewal, holding deposit and booking fee.
 For utilities record who pays or whether each is included/excluded for electricity/TNB, water, IWK, internet/WiFi, air-conditioning, maintenance fee, quit rent, and assessment.
 For parking record bays, bay numbers, access cards, remote controls, and keys. Extract a structured inventory item list for furnished items such as beds, wardrobes, appliances, furniture, curtains, and water heaters.
@@ -195,7 +232,7 @@ Preserve material special clauses as concise complete statements.
 Extract signatures, witnesses, stamp duty, inventory, restrictions, late-payment terms, termination, viewing rights, insurance, maintenance, access-card and car-park terms.
 Identify legal and operational risks, including missing signatures, missing witnesses, missing party IC/passport details, missing stamp duty evidence, conflicting rental amounts or dates, potentially unlawful or unenforceable clauses, no renewal clause, no inspection clause, no termination clause, deposit mismatch, missing inventory, and missing maintenance terms.
 Every risk must include a stable snake_case code, severity, evidence-based reason, and practical recommendation.
-Return the canonical schema exactly. It has document, confidence, tenant, landlord, contacts, property, financial, tenancy, payment, utilities, parking, inventory, clause_coverage, legal, clauses, risks, and warnings. Do not add fields.
+Return the canonical schema exactly. It has document, confidence, tenant, landlord, contacts, property, financial, deposit_details, tenancy, notice_details, payment, utilities, parking, inventory, clause_coverage, legal, clauses, risks, and warnings. Do not add fields.
 Each risk must include a stable snake_case code, severity, category, evidence-based reason, and practical recommendation.
 Do not provide legal conclusions as certain when the text only supports a concern; label those items as requiring legal review.
 Confidence is a number from 0 to 1 representing the reliability and completeness of the entire extraction.
@@ -316,11 +353,10 @@ export function enrichExtractedTenancyTerms(
 ): TenancyLegalIntelligence {
   const extraction = normalizeExtraction(source);
   const monthlyRental = extraction.financial.monthly_rental;
-  if (monthlyRental <= 0) return extraction;
-
   const financial = { ...extraction.financial };
   const evidence = { ...extraction.field_evidence };
   const warnings = [...extraction.warnings];
+  const depositDetails = { ...defaultDepositDetails(), ...extraction.deposit_details };
   const deposits: Array<{ field: keyof Pick<TenancyLegalIntelligence['financial'], 'security_deposit' | 'utility_deposit' | 'access_card_deposit' | 'car_park_deposit'>; label: string; aliases: string[] }> = [
     { field: 'security_deposit', label: 'Security deposit', aliases: ['security deposit', 'earnest deposit'] },
     { field: 'utility_deposit', label: 'Utility deposit', aliases: ['utility deposit', 'utilities deposit'] },
@@ -329,21 +365,218 @@ export function enrichExtractedTenancyTerms(
   ];
 
   for (const deposit of deposits) {
-    if (financial[deposit.field] > 0) continue;
+    const existing = depositDetails[deposit.field];
     const explicit = findExplicitDepositAmount(rawText, deposit.aliases);
     if (explicit) {
+      const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
+      const expected = multiple && monthlyRental !== null ? roundMoney(monthlyRental * multiple.months) : null;
+      const requiresReview = Boolean(expected !== null && Math.abs(expected - explicit.amount) > 1);
       financial[deposit.field] = explicit.amount;
+      depositDetails[deposit.field] = {
+        amount: explicit.amount, basis: 'explicit_amount', rental_multiple: multiple?.months ?? null,
+        source_page: explicit.page, source_excerpt: explicit.excerpt, confidence: 98, requires_review: requiresReview
+      };
       evidence[`financial.${deposit.field}`] = { value: String(explicit.amount), confidence: 98, source_page: explicit.page, source_excerpt: explicit.excerpt };
+      if (requiresReview) warnings.push(`Requires confirmation: ${deposit.label.toLowerCase()} conflicts with the stated rental multiple.`);
+      continue;
+    }
+    if (existing.amount !== null && existing.basis === 'explicit_amount') {
+      financial[deposit.field] = existing.amount;
       continue;
     }
     const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
-    if (multiple === null) continue;
+    if (multiple === null || monthlyRental === null) continue;
     const amount = roundMoney(monthlyRental * multiple.months);
     financial[deposit.field] = amount;
+    depositDetails[deposit.field] = {
+      amount, basis: 'rental_multiple', rental_multiple: multiple.months,
+      source_page: multiple.page, source_excerpt: multiple.excerpt, confidence: 88, requires_review: false
+    };
     evidence[`financial.${deposit.field}`] = { value: String(amount), confidence: 88, source_page: multiple.page, source_excerpt: multiple.excerpt };
     warnings.push(`${deposit.label} was calculated from the stated ${multiple.months}-month rental multiple; verify the agreement wording.`);
   }
-  return { ...extraction, financial, field_evidence: evidence, warnings: uniqueStrings(warnings) };
+  for (const deposit of deposits) {
+    if (financial[deposit.field] === 0 && depositDetails[deposit.field].amount === null) financial[deposit.field] = null;
+  }
+  for (const deposit of [
+    { key: 'key_deposit' as const, label: 'Key deposit', aliases: ['key deposit', 'key(s) deposit'] },
+    { key: 'renovation_deposit' as const, label: 'Renovation deposit', aliases: ['renovation deposit', 'renovation security deposit'] }
+  ]) {
+    const explicit = findExplicitDepositAmount(rawText, deposit.aliases);
+    if (explicit) depositDetails[deposit.key] = {
+      amount: explicit.amount, basis: 'explicit_amount', rental_multiple: null, source_page: explicit.page,
+      source_excerpt: explicit.excerpt, confidence: 98, requires_review: false
+    };
+  }
+  const knownDepositLabels = /security|earnest|utility|utilities|access|car\s*park|parking|remote|key|renovation/i;
+  const otherDeposits = rawText.split(/\r?\n/).flatMap((line) => {
+    const label = line.match(/\b([a-z][a-z /-]{0,60}\s+deposit)\b/i)?.[1]?.replace(/\s+/g, ' ').trim() ?? '';
+    const amount = line.match(/\b(?:RM|MYR)\s*([\d,]+(?:\.\d{1,2})?)\b/i)?.[1];
+    if (!label || !amount || knownDepositLabels.test(label)) return [];
+    const value = Number(amount.replace(/,/g, ''));
+    if (!Number.isFinite(value) || value < 0) return [];
+    const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(line.trim()), 'i'));
+    return [{
+      label, amount: roundMoney(value), basis: 'explicit_amount' as const, rental_multiple: null,
+      source_page: source.page, source_excerpt: source.excerpt, confidence: 95, requires_review: false
+    }];
+  });
+  depositDetails.other_deposits = uniqueDepositDetails([...depositDetails.other_deposits, ...otherDeposits]);
+  const withDeposits = {
+    ...extraction,
+    financial,
+    deposit_details: depositDetails,
+    field_evidence: evidence,
+    warnings: uniqueStrings(warnings)
+  };
+  return enrichNoticePeriods(enrichContactsFromDocument(withDeposits, rawText), rawText);
+}
+
+function defaultDepositEvidence(): DepositEvidence {
+  return { amount: null, basis: 'not_found', rental_multiple: null, source_page: null, source_excerpt: '', confidence: 0, requires_review: false };
+}
+
+function defaultDepositDetails(): NonNullable<TenancyLegalIntelligence['deposit_details']> {
+  return {
+    security_deposit: defaultDepositEvidence(), utility_deposit: defaultDepositEvidence(),
+    access_card_deposit: defaultDepositEvidence(), car_park_deposit: defaultDepositEvidence(),
+    key_deposit: defaultDepositEvidence(), renovation_deposit: defaultDepositEvidence(), other_deposits: []
+  };
+}
+
+function uniqueDepositDetails(values: Array<DepositEvidence & { label: string }>): Array<DepositEvidence & { label: string }> {
+  const seen = new Set<string>();
+  return values.filter((item) => {
+    const key = `${item.label}:${item.amount ?? ''}:${item.source_page ?? ''}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function enrichNoticePeriods(source: TenancyLegalIntelligence, rawText: string): TenancyLegalIntelligence {
+  const occurrences = findNoticeOccurrences(rawText);
+  const primary = occurrences.find((item): item is NoticeOccurrence & { notice_type: 'non_renewal' | 'termination' } => item.notice_type === 'non_renewal')
+    ?? occurrences.find((item): item is NoticeOccurrence & { notice_type: 'non_renewal' | 'termination' } => item.notice_type === 'termination')
+    ?? null;
+  const other = occurrences.flatMap((item) => item !== primary && item.notice_type !== 'non_renewal' && item.notice_type !== 'termination'
+    ? [{ ...item, notice_type: item.notice_type as NoticePeriodDetails['other_notice_periods'][number]['notice_type'] }] : []);
+  const textContainsNoticeTerms = /notice|terminat|determination|expiry|renewal|view(?:ing)?|inspect|breach|default|vacant/i.test(rawText);
+  const fallbackPrimary = !primary && !textContainsNoticeTerms && !isAmbiguousNoticePeriod(source.tenancy.notice_period)
+    ? normalizeNoticePeriod(source.tenancy.notice_period) : '';
+  const details: NoticePeriodDetails = primary ? {
+    primary_notice_period: primary.period,
+    notice_type: primary.notice_type,
+    other_notice_periods: other,
+    source_page: primary.source_page,
+    source_excerpt: primary.source_excerpt,
+    confidence: primary.confidence
+  } : {
+    primary_notice_period: fallbackPrimary, notice_type: fallbackPrimary ? 'termination' : '', other_notice_periods: other,
+    source_page: null, source_excerpt: '', confidence: fallbackPrimary ? 50 : 0
+  };
+  const warnings = [...source.warnings];
+  if (!primary && !fallbackPrimary) warnings.push('Missing from document: primary notice period.');
+  return {
+    ...source,
+    tenancy: { ...source.tenancy, notice_period: primary?.period ?? fallbackPrimary },
+    notice_details: details,
+    warnings: uniqueStrings(warnings)
+  };
+}
+
+type NoticeOccurrence = Omit<NoticePeriodDetails['other_notice_periods'][number], 'notice_type'> & {
+  notice_type: NoticePeriodDetails['other_notice_periods'][number]['notice_type'] | 'non_renewal' | 'termination';
+};
+
+function findNoticeOccurrences(rawText: string): NoticeOccurrence[] {
+  const occurrences: NoticeOccurrence[] = [];
+  const seen = new Set<string>();
+  for (const line of rawText.split(/\r?\n/)) {
+    const normalized = line.replace(/\s+/g, ' ').trim();
+    if (!normalized || !/notice|not less than|prior written|written notice|vacant possession|cure period/i.test(normalized)) continue;
+    const type = classifyNoticeType(normalized);
+    const period = extractNoticeDuration(normalized);
+    if (!type || !period) continue;
+    const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(normalized), 'i'));
+    const key = `${type}:${period}:${source.page ?? ''}:${normalized.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    occurrences.push({ notice_type: type, period, source_page: source.page, source_excerpt: source.excerpt, confidence: 93 });
+  }
+  return occurrences;
+}
+
+function classifyNoticeType(value: string): NoticePeriodDetails['other_notice_periods'][number]['notice_type'] | 'non_renewal' | 'termination' | null {
+  const text = value.toLowerCase();
+  if (/view(?:ing)?|inspect(?:ion)?|access to premises|entry to premises/.test(text)) return 'viewing';
+  if (/breach|default|remed(?:y|ied)|cure/.test(text)) return 'default_cure';
+  if (/rent(?:al)? review|review of rent/.test(text)) return 'rent_review';
+  if (/option to renew|exercise (?:the )?(?:renewal )?option|renewal exercise/.test(text)) return 'renewal_exercise';
+  if (/vacant possession|vacate|handover|hand over/.test(text)) return 'vacant_possession';
+  if (/early (?:termination|terminate)|terminate early|premature termination/.test(text)) return 'early_termination';
+  if (/non[-\s]?renew|not renew|before (?:the )?expiry|upon expiry|expiry.*notice/.test(text)) return 'non_renewal';
+  if (/terminat|determination|either party may.*notice|party may.*notice/.test(text)) return 'termination';
+  return null;
+}
+
+function extractNoticeDuration(value: string): string {
+  const words: Record<string, number> = {
+    half: 0.5, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirty: 30, sixty: 60, ninety: 90
+  };
+  const match = value.toLowerCase().match(/(?:not\s+less\s+than\s+)?(half|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirty|sixty|ninety|\d+(?:\.\d+)?)(?:\s*\(\s*(\d+(?:\.\d+)?)\s*\))?\s*(hour|day|week|month|year)s?\b/i);
+  if (!match) return '';
+  const amount = Number(match[2] ?? words[match[1].toLowerCase()] ?? match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const unit = match[3].toLowerCase();
+  return `${amount} ${unit}${amount === 1 ? '' : 's'}`;
+}
+
+function enrichContactsFromDocument(source: TenancyLegalIntelligence, rawText: string): TenancyLegalIntelligence {
+  const evidence = { ...source.field_evidence };
+  const enrichParty = (party: LegalParty, role: 'tenant' | 'landlord'): LegalParty => {
+    const details = findPartyContactDetails(rawText, role);
+    const result = { ...party };
+    if (!result.phone && details.phone) {
+      result.phone = details.phone.value;
+      evidence[`${role}.phone`] = { value: details.phone.value, confidence: 92, source_page: details.phone.page, source_excerpt: details.phone.excerpt };
+    }
+    if (!result.email && details.email) {
+      result.email = details.email.value;
+      evidence[`${role}.email`] = { value: details.email.value, confidence: 96, source_page: details.email.page, source_excerpt: details.email.excerpt };
+    }
+    return result;
+  };
+  return {
+    ...source,
+    tenant: enrichParty(source.tenant, 'tenant'),
+    landlord: enrichParty(source.landlord, 'landlord'),
+    field_evidence: evidence
+  };
+}
+
+function findPartyContactDetails(rawText: string, role: 'tenant' | 'landlord'): {
+  phone?: { value: string; page: number | null; excerpt: string };
+  email?: { value: string; page: number | null; excerpt: string };
+} {
+  const rolePattern = role === 'tenant' ? '(?:tenant|lessee|penyewa)' : '(?:landlord|owner|lessor|tuan\\s*rumah)';
+  const start = new RegExp(`(?:^|\\n)\\s*${rolePattern}\\b[\\s\\S]{0,650}`, 'ig');
+  for (const match of rawText.matchAll(start)) {
+    const block = match[0].replace(/^\s+/, '').split(/\n\s*(?:tenant|lessee|landlord|owner|lessor|penyewa|tuan\s*rumah)\b/i)[0];
+    const emailMatch = block.match(/(?:e-?mail)\s*(?:address)?\s*[:#-]?\s*([^\s,;]+@[^\s,;]+)/i)
+      ?? block.match(/\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/i);
+    const phoneMatch = block.match(/(?:phone|telephone|tel|mobile|contact)\s*(?:no\.?|number)?\s*[:#-]?\s*([+0-9][0-9\s()-]{7,18})/i);
+    const phone = normalizeMalaysianPhone(phoneMatch?.[1] ?? '');
+    const email = normalizeEmail(emailMatch?.[1] ?? '');
+    if (!phone && !email) continue;
+    const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(block.replace(/\s+/g, ' ').trim()), 'i'));
+    return {
+      ...(phone ? { phone: { value: phone, page: source.page, excerpt: source.excerpt } } : {}),
+      ...(email ? { email: { value: email, page: source.page, excerpt: source.excerpt } } : {})
+    };
+  }
+  return {};
 }
 
 export function applyRiskEngine(
@@ -357,7 +590,7 @@ export function applyRiskEngine(
 
   if (!/\bsignature(?:s|d)?\b|signed by|execution|ditandatangani/.test(text)) addRisk(risks, 'missing_signatures', 'high', 'No signature or execution wording was detected.', 'Confirm that every required party has signed the final agreement.');
   if (!/\bwitness(?:es|ed)?\b|in the presence of|saksi/.test(text)) addRisk(risks, 'missing_witness', 'high', 'No witness or witnessing provision was detected.', 'Arrange witnessing and record each witness name and signature where required.');
-  if (!/stamp duty|stamping|duly stamped|hasil|lhdn|setem/.test(text) && extraction.financial.stamp_duty === 0) {
+  if (!/stamp duty|stamping|duly stamped|hasil|lhdn|setem/.test(text) && (extraction.financial.stamp_duty === null || extraction.financial.stamp_duty === 0)) {
     addRisk(risks, 'missing_stamp_duty', 'high', 'No stamp duty amount or evidence of stamping was detected.', 'Verify assessment and stamping with LHDN before relying on the agreement.');
   }
   if (!/renew|renewal|pembaharuan/.test(text) && !extraction.tenancy.renewal_option) addRisk(risks, 'missing_renewal_clause', 'medium', 'No renewal option or renewal clause was detected.', 'Confirm whether renewal is intentionally excluded or document the agreed renewal process.');
@@ -377,21 +610,21 @@ export function applyRiskEngine(
   }
 
   const expectedSecurityMonths = extractDepositMonths(rawText, 'security');
-  if (expectedSecurityMonths !== null && extraction.financial.monthly_rental > 0) {
+  if (expectedSecurityMonths !== null && isPositiveMoney(extraction.financial.monthly_rental) && extraction.financial.security_deposit !== null) {
     const expected = extraction.financial.monthly_rental * expectedSecurityMonths;
     if (Math.abs(expected - extraction.financial.security_deposit) > 1) {
       const source = findDepositRentalMultiple(rawText, ['security deposit', 'earnest deposit']);
-      addRisk(risks, 'security_deposit_mismatch', 'high', 'Requires Review: the extracted security deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
-      warnings.push('Requires Review: security deposit conflicts with the stated rental multiple.');
+      addRisk(risks, 'security_deposit_mismatch', 'high', 'Requires confirmation: the extracted security deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
+      warnings.push('Requires confirmation: security deposit conflicts with the stated rental multiple.');
     }
   }
   const expectedUtilityMonths = extractDepositMonths(rawText, 'utilit');
-  if (expectedUtilityMonths !== null && extraction.financial.monthly_rental > 0) {
+  if (expectedUtilityMonths !== null && isPositiveMoney(extraction.financial.monthly_rental) && extraction.financial.utility_deposit !== null) {
     const expected = extraction.financial.monthly_rental * expectedUtilityMonths;
     if (Math.abs(expected - extraction.financial.utility_deposit) > 1) {
       const source = findDepositRentalMultiple(rawText, ['utility deposit', 'utilities deposit']);
-      addRisk(risks, 'utility_deposit_mismatch', 'high', 'Requires Review: the extracted utility deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
-      warnings.push('Requires Review: utility deposit conflicts with the stated rental multiple.');
+      addRisk(risks, 'utility_deposit_mismatch', 'high', 'Requires confirmation: the extracted utility deposit amount is preserved but conflicts with the stated rental-month multiple.', 'Reconcile the stated multiple and payable amount without overwriting the extracted value.', 'financial', source?.page ?? null, source?.excerpt ?? '');
+      warnings.push('Requires confirmation: utility deposit conflicts with the stated rental multiple.');
     }
   }
 
@@ -404,7 +637,7 @@ export function applyRiskEngine(
     warnings.push('Conflicting tenancy dates require manual review.');
   }
   if (hasInvalidTenancyPeriod(extraction)) addRisk(risks, 'invalid_tenancy_period', 'high', 'The expiry date is not later than the commencement date.', 'Correct the commencement and expiry dates before confirming the tenancy.', 'tenancy_period');
-  if (isAmbiguousNoticePeriod(extraction.tenancy.notice_period)) addRisk(risks, 'ambiguous_notice_period', 'medium', 'The notice period is missing or does not state a clear number and time unit.', 'Confirm the required notice duration and whether it is measured in days or months.', 'termination');
+  if (isAmbiguousNoticePeriod(extraction.tenancy.notice_period)) addRisk(risks, 'ambiguous_notice_period', 'medium', 'Missing from document: the ordinary non-renewal or termination notice period is not stated clearly.', 'Confirm the required notice duration and whether it is measured in days or months.', 'termination');
   if (!/(?:tenant|landlord|lessee|lessor|penyewa|tuan rumah)[\s\S]{0,120}(?:tnb|electric|water|iwk|wifi|utilities|utilit|air|elektrik)/i.test(rawText)) {
     addRisk(risks, 'unclear_utility_responsibility', 'medium', 'Responsibility for utilities is not clearly allocated between the parties.', 'State which party pays and manages each utility account.', 'utilities');
   }
@@ -448,9 +681,9 @@ export function createTenancySummary(extraction: TenancyLegalIntelligence): stri
   const opening = `This is a ${duration ? `${duration} ` : ''}${type.toLowerCase()} tenancy${commencement ? ` commencing on ${commencement}` : ''}`;
   const money = extraction.financial;
   const amounts = [
-    money.monthly_rental > 0 ? `${formatMYR(money.monthly_rental)} monthly rental` : '',
-    money.security_deposit > 0 ? `${formatMYR(money.security_deposit)} security deposit` : '',
-    money.utility_deposit > 0 ? `${formatMYR(money.utility_deposit)} utility deposit` : ''
+    isPositiveMoney(money.monthly_rental) ? `${formatMYR(money.monthly_rental)} monthly rental` : '',
+    isPositiveMoney(money.security_deposit) ? `${formatMYR(money.security_deposit)} security deposit` : '',
+    isPositiveMoney(money.utility_deposit) ? `${formatMYR(money.utility_deposit)} utility deposit` : ''
   ].filter(Boolean);
   const renewal = extraction.tenancy.renewal_option ? ' Renewal option available.' : ' No renewal option was detected.';
   const risk = ` ${extraction.risks.length} legal ${extraction.risks.length === 1 ? 'risk' : 'risks'} detected.`;
@@ -497,7 +730,7 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
     confidence: source.confidence,
     tenant: mapParty(source.tenant),
     landlord: mapParty(source.landlord),
-    contacts: source.contacts.map((contact) => ({ ...mapParty(contact), role: contact.role, represents: contact.represents, source_page: contact.source_page, source_excerpt: contact.source_excerpt, confidence: Math.round(contact.confidence * 100) })),
+    contacts: normalizeContacts(source.contacts.map((contact) => ({ ...mapParty(contact), role: contact.role, represents: contact.represents, ren_number: contact.ren_number, source_page: contact.source_page, source_excerpt: contact.source_excerpt, confidence: Math.round(contact.confidence * 100) }))),
     property: {
       name: source.property.name,
       unit: source.property.unit_number,
@@ -513,16 +746,18 @@ export function mapCanonicalTenancyExtraction(source: CanonicalTenancyExtraction
       car_parks: source.property.car_parks
     },
     financial: {
-      monthly_rental: source.financial.monthly_rental ?? 0,
-      security_deposit: source.financial.security_deposit ?? 0,
-      utility_deposit: source.financial.utility_deposit ?? 0,
-      access_card_deposit: source.financial.access_card_deposit ?? 0,
-      car_park_deposit: source.financial.car_park_deposit ?? 0,
-      holding_deposit: source.financial.holding_deposit ?? 0,
-      booking_fee: source.financial.booking_fee ?? 0,
-      stamp_duty: source.financial.stamp_duty ?? 0
+      monthly_rental: source.financial.monthly_rental,
+      security_deposit: source.financial.security_deposit,
+      utility_deposit: source.financial.utility_deposit,
+      access_card_deposit: source.financial.access_card_deposit,
+      car_park_deposit: source.financial.car_park_deposit,
+      holding_deposit: source.financial.holding_deposit,
+      booking_fee: source.financial.booking_fee,
+      stamp_duty: source.financial.stamp_duty
     },
+    deposit_details: source.deposit_details,
     tenancy: { ...source.tenancy, payment_due_day: source.tenancy.payment_due_day ?? '' },
+    notice_details: source.notice_details,
     payment: source.payment,
     utilities: source.utilities,
     parking: source.parking,
@@ -554,9 +789,10 @@ function mapParty(source: { name: string; company: string; identification: strin
 
 function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalIntelligence {
   const text = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
-  const money = (value: unknown) => {
+  const money = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === '') return null;
     const amount = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
-    return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
+    return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : null;
   };
   const party = (value: Partial<LegalParty> | undefined): LegalParty => ({
     name: normalizePersonName(value?.name), company: text(value?.company), ic_passport: normalizeIdentification(value?.ic_passport).replace(/\s+/g, ''),
@@ -582,6 +818,7 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
       car_park_deposit: money(source.financial?.car_park_deposit), holding_deposit: money(source.financial?.holding_deposit),
       booking_fee: money(source.financial?.booking_fee), stamp_duty: money(source.financial?.stamp_duty)
     },
+    deposit_details: normalizeDepositDetails(source.deposit_details),
     tenancy: {
       commencement_date: normalizeDate(text(source.tenancy?.commencement_date)),
       expiry_date: normalizeDate(text(source.tenancy?.expiry_date)),
@@ -589,6 +826,7 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
       automatic_renewal: text(source.tenancy?.automatic_renewal), notice_period: normalizeNoticePeriod(text(source.tenancy?.notice_period)),
       payment_due_day: normalizePaymentDay(text(source.tenancy?.payment_due_day))
     },
+    notice_details: normalizeNoticeDetails(source.notice_details),
     utilities: {
       tnb: text(source.utilities?.tnb), water: text(source.utilities?.water),
       iwk: text(source.utilities?.iwk), wifi: text(source.utilities?.wifi), aircond: text(source.utilities?.aircond),
@@ -617,13 +855,66 @@ function normalizeExtraction(source: TenancyLegalIntelligence): TenancyLegalInte
   };
 }
 
+function normalizeDepositDetails(value: TenancyLegalIntelligence['deposit_details']): NonNullable<TenancyLegalIntelligence['deposit_details']> {
+  const defaults = defaultDepositDetails();
+  const normalize = (item: Partial<DepositEvidence> | undefined): DepositEvidence => {
+    const amount = item?.amount;
+    const normalizedAmount = typeof amount === 'number' && Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : null;
+    const basis = item?.basis === 'explicit_amount' || item?.basis === 'rental_multiple' || item?.basis === 'not_found'
+      ? item.basis : normalizedAmount === null ? 'not_found' : 'explicit_amount';
+    const multiple = typeof item?.rental_multiple === 'number' && Number.isFinite(item.rental_multiple) && item.rental_multiple >= 0
+      ? item.rental_multiple : null;
+    return {
+      amount: normalizedAmount, basis: normalizedAmount === null ? 'not_found' : basis, rental_multiple: multiple,
+      source_page: Number.isInteger(item?.source_page) && Number(item?.source_page) > 0 ? Number(item?.source_page) : null,
+      source_excerpt: extractionText(item?.source_excerpt).slice(0, 500),
+      confidence: Math.max(0, Math.min(100, Number(item?.confidence) || 0)),
+      requires_review: item?.requires_review === true
+    };
+  };
+  const source = value ?? defaults;
+  return {
+    security_deposit: normalize(source.security_deposit), utility_deposit: normalize(source.utility_deposit),
+    access_card_deposit: normalize(source.access_card_deposit), car_park_deposit: normalize(source.car_park_deposit),
+    key_deposit: normalize(source.key_deposit), renovation_deposit: normalize(source.renovation_deposit),
+    other_deposits: Array.isArray(source.other_deposits) ? source.other_deposits.flatMap((item) => {
+      const label = extractionText(item.label);
+      return label ? [{ ...normalize(item), label }] : [];
+    }) : []
+  };
+}
+
+function normalizeNoticeDetails(value: TenancyLegalIntelligence['notice_details']): NoticePeriodDetails {
+  const source = value;
+  const primary = normalizeNoticePeriod(extractionText(source?.primary_notice_period));
+  const noticeType = source?.notice_type === 'non_renewal' || source?.notice_type === 'termination' ? source.notice_type : '';
+  const allowed = new Set<NoticePeriodDetails['other_notice_periods'][number]['notice_type']>(['early_termination', 'default_cure', 'viewing', 'rent_review', 'renewal_exercise', 'vacant_possession']);
+  return {
+    primary_notice_period: primary,
+    notice_type: primary ? noticeType || 'termination' : '',
+    other_notice_periods: Array.isArray(source?.other_notice_periods) ? source.other_notice_periods.flatMap((item) => {
+      if (!allowed.has(item.notice_type)) return [];
+      const period = normalizeNoticePeriod(item.period);
+      return period ? [{
+        notice_type: item.notice_type, period,
+        source_page: Number.isInteger(item.source_page) && Number(item.source_page) > 0 ? Number(item.source_page) : null,
+        source_excerpt: extractionText(item.source_excerpt).slice(0, 500),
+        confidence: Math.max(0, Math.min(100, Number(item.confidence) || 0))
+      }] : [];
+    }) : [],
+    source_page: Number.isInteger(source?.source_page) && Number(source?.source_page) > 0 ? Number(source?.source_page) : null,
+    source_excerpt: extractionText(source?.source_excerpt).slice(0, 500),
+    confidence: Math.max(0, Math.min(100, Number(source?.confidence) || 0))
+  };
+}
+
 function normalizeMalaysianPhone(value: string): string {
   if (!value) return '';
-  const digits = value.replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '');
-  if (/^\+60\d{8,10}$/.test(digits)) return digits;
-  if (/^60\d{8,10}$/.test(digits)) return `+${digits}`;
-  if (/^0\d{8,10}$/.test(digits)) return `+60${digits.slice(1)}`;
-  return digits;
+  const digits = value.replace(/\D/g, '');
+  const local = digits.startsWith('60') ? `0${digits.slice(2)}` : digits;
+  // Malaysian mobile and landline lengths only; never surface account, passport, NRIC, date, or page values as phones.
+  if (!/^0(?:1\d{7,8}|[3-9]\d{7,8})$/.test(local)) return '';
+  return `+60${local.slice(1)}`;
 }
 
 function normalizeEmail(value: string): string {
@@ -854,6 +1145,10 @@ function hasPartyDetails(party: LegalParty): boolean {
   return Boolean(party.name && (party.ic_passport || party.company || party.phone || party.email));
 }
 
+function isPositiveMoney(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 function extractRentalAmounts(text: string): number[] {
   const values: number[] = [];
   const pattern = /(?:monthly\s+rent(?:al)?|rent(?:al)?\s+(?:of|is|shall be|payable)?)[\s\S]{0,80}?RM\s*([\d,]+(?:\.\d{1,2})?)/gi;
@@ -872,8 +1167,9 @@ function extractDepositMonths(text: string, kind: 'security' | 'utilit'): number
 function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount: number; page: number | null; excerpt: string } | null {
   const label = aliases.map(escapeRegExp).join('|');
   const labelPattern = new RegExp(`(?:${label})`, 'i');
-  const amountPattern = /\\b(?:RM|MYR)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\b/i;
-  const lines = rawText.split(/\\r?\\n/);
+  const amountPattern = /\b(?:RM|MYR)\s*([\d,]+(?:\.\d{1,2})?)\b/i;
+  const noDepositPattern = /\b(?:no|nil|zero)\s+(?:security\s+|utility\s+|access\s+card\s+|car\s+park\s+|parking\s+|remote\s+control\s+)?deposit\b|\bdeposit\s*(?:is\s*)?(?:not\s+required|nil|zero)\b/i;
+  const lines = rawText.split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -882,7 +1178,11 @@ function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount
     const sameLineAmount = line.match(amountPattern);
     const nextLineAmount = !sameLineAmount && lines[index + 1]?.trim().match(amountPattern);
     const amountMatch = sameLineAmount ?? nextLineAmount;
-    if (!amountMatch) continue;
+    if (!amountMatch && !noDepositPattern.test(line)) continue;
+    if (!amountMatch) {
+      const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(line.trim()), 'i'));
+      return { amount: 0, page: source.page, excerpt: source.excerpt };
+    }
     const amount = Number(amountMatch[1].replace(/,/g, ''));
     if (!Number.isFinite(amount) || amount < 0) continue;
     const excerpt = sameLineAmount ? line : `${line} ${lines[index + 1]}`;
@@ -954,12 +1254,16 @@ function normalizeContacts(value: ExtractedTenancyContact[] | undefined): Extrac
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   return value.flatMap((contact) => {
+    const sourceExcerpt = extractionText(contact.source_excerpt).slice(0, 500);
+    const agentEvidence = Boolean(extractionText(contact.ren_number)) || /\b(?:agent|negotiator|real estate|property agency|ren\s*[:#-]?\s*\w+)/i.test(sourceExcerpt);
+    const inferredRole = contact.role === 'agent' && /\bwitness\b/i.test(sourceExcerpt) && !agentEvidence ? 'witness' : contact.role;
     const normalized = {
       ...partyForContact(contact),
-      role: ['tenant', 'landlord', 'witness', 'agent', 'law_firm'].includes(contact.role) ? contact.role : 'witness' as const,
+      role: ['tenant', 'landlord', 'witness', 'agent', 'law_firm'].includes(inferredRole) ? inferredRole : 'witness' as const,
       represents: ['tenant', 'landlord', 'both', 'neutral', 'unknown'].includes(contact.represents) ? contact.represents : 'unknown' as const,
+      ren_number: normalizeIdentification(contact.ren_number).replace(/\s+/g, ''),
       source_page: Number.isInteger(contact.source_page) && Number(contact.source_page) > 0 ? Number(contact.source_page) : null,
-      source_excerpt: extractionText(contact.source_excerpt).slice(0, 500),
+      source_excerpt: sourceExcerpt,
       confidence: Math.max(0, Math.min(100, Number(contact.confidence) || 0))
     };
     if (!normalized.name && !normalized.company && !normalized.ic_passport && !normalized.company_number && !normalized.phone && !normalized.email) return [];

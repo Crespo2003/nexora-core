@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Confidence, TenancyExtraction } from '../lib/ai/tenancyExtractor';
+import type { DepositEvidence } from '../lib/ai/extractTenancy';
 import {
   currentIsoDate,
   currentIsoMonth,
@@ -1444,6 +1445,16 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
   const payment = additional.payment;
   const parking = additional.parking;
   const inventory = additional.inventory;
+  const deposits = additional.deposit_details;
+  const depositFields: Array<[string, DepositEvidence]> = deposits ? [
+    ['Security', deposits.security_deposit], ['Utility', deposits.utility_deposit], ['Access card', deposits.access_card_deposit],
+    ['Car park', deposits.car_park_deposit], ['Key', deposits.key_deposit], ['Renovation', deposits.renovation_deposit],
+    ...deposits.other_deposits.map((item) => [item.label, item] as [string, DepositEvidence])
+  ] : [];
+  const depositEvidence = depositFields.filter(([, item]) => item.amount !== null || item.source_excerpt).map(([label, item]) =>
+    `${label}: ${item.amount === null ? 'Not found' : formatMYR(item.amount)} (${item.basis}${item.rental_multiple !== null ? `, ${item.rental_multiple} month rental` : ''}${item.requires_review ? ', Requires confirmation' : ''}${item.source_page ? `, page ${item.source_page}` : ''})`
+  );
+  const notice = additional.notice_details;
   return (
     <div className="memory-stack">
       <MemoryItem label="AI provider" value={extraction.provider} fallback={fallback} />
@@ -1469,6 +1480,8 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
         <p><strong>Parking and access:</strong> {[parking?.bays, parking?.bay_numbers, parking?.access_cards, parking?.remote_controls, parking?.keys].filter(Boolean).join(' · ') || fallback}</p>
         <p><strong>Inventory:</strong> {inventory?.items?.join(', ') || inventory?.furnished || fallback}</p>
         <p><strong>Clauses present:</strong> {presentClauses.join(', ') || fallback}</p>
+        <p><strong>Deposits:</strong> {depositEvidence.join(' · ') || fallback}</p>
+        <p><strong>Notice:</strong> {notice?.primary_notice_period ? `${notice.notice_type.replace('_', ' ')}: ${notice.primary_notice_period}${notice.source_page ? ` (page ${notice.source_page})` : ''}` : 'Missing from document'}{notice?.other_notice_periods.length ? ` · Other: ${notice.other_notice_periods.map((item) => `${item.notice_type.replaceAll('_', ' ')} ${item.period}${item.source_page ? ` (page ${item.source_page})` : ''}`).join(', ')}` : ''}</p>
         <p><strong>Contacts:</strong> {contacts.map((contact) => `${contact.role}: ${contact.name || contact.company}${contact.source_page ? ` (page ${contact.source_page})` : ''}`).join(' · ') || fallback}</p>
       </details>
     </div>
