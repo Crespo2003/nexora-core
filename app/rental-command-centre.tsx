@@ -26,6 +26,13 @@ import {
   type TenancyMappedForm
 } from '../lib/tenancy/mapTenancyExtractionToForm';
 import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
+import {
+  canConfirmReviewedImport,
+  parseReviewedDraft,
+  serializeReviewedDraft,
+  tenancyDraftStorageKey,
+  type ExistingTenancyKey
+} from '../lib/tenancy/importReview';
 import { formatMYR, parseMYR } from '../lib/formatters';
 import { normalizePhone } from '../lib/contacts/phone';
 
@@ -234,6 +241,22 @@ function emptyForm(): TenancyForm {
     documentId: '',
     workspaceId: ''
   };
+}
+
+function safeReadDraft(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function clearReviewedDraft(workspaceId: string, documentId: string): void {
+  try {
+    window.localStorage.removeItem(tenancyDraftStorageKey(workspaceId, documentId));
+  } catch {
+    // Nothing further to do if the device blocks storage access.
+  }
 }
 
 function isMissingTableError(error: unknown): boolean {
@@ -625,6 +648,7 @@ export default function RentalCommandCentre() {
   const [reviewForm, setReviewForm] = useState<ImportReviewForm | null>(null);
   const [importErrors, setImportErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [importState, setImportState] = useState<ImportState>('idle');
+  const [importedTenancyId, setImportedTenancyId] = useState('');
   const [importFailedStage, setImportFailedStage] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | null>(null);
@@ -640,6 +664,9 @@ export default function RentalCommandCentre() {
   const outstandingBalance = Math.max(totalDue - totalPaid, 0);
   const lateCount = collections.filter((collection) => collection.paymentStatus === 'overdue' || collection.paymentStatus === 'partial').length;
   const depositExposure = tenancies.reduce((sum, tenancy) => sum + tenancy.securityDeposit + tenancy.utilityDeposit + tenancy.accessCardDeposit + tenancy.carParkRemoteDeposit, 0);
+  const existingTenancyKeys: ExistingTenancyKey[] = tenancies.map((tenancy) => ({ tenant: tenancy.tenant, property: tenancy.property, unitNo: tenancy.unitNo }));
+  const canImportReviewed = reviewForm ? canConfirmReviewedImport(reviewForm, existingTenancyKeys) : false;
+  const importCompleted = importState === 'success' && Boolean(importedTenancyId);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(languageStorageKey);
@@ -926,6 +953,7 @@ export default function RentalCommandCentre() {
     setOperationId('parse-import');
     setImportState('uploading');
     setImportFailedStage('');
+    setImportedTenancyId('');
     setUploadProgress(0);
     try {
       const prepareResponse = await fetch('/api/tenancy-import/upload', {
@@ -980,11 +1008,14 @@ export default function RentalCommandCentre() {
       }
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
+      const documentId = String(payload.documentId ?? '');
       const mapped = mapTenancyExtractionToForm(parsed, {
-        documentId: String(payload.documentId ?? ''),
+        documentId,
         workspaceId
       });
-      const reviewed = mergeMappedFormPreservingEdits(form, mapped, userEditedFields.current);
+      const merged = mergeMappedFormPreservingEdits(form, mapped, userEditedFields.current);
+      const draft = parseReviewedDraft(safeReadDraft(tenancyDraftStorageKey(workspaceId, documentId)));
+      const reviewed = draft ? { ...merged, ...draft } : merged;
       setExtraction(parsed);
       setForm(reviewed);
       setReviewForm(reviewed);
@@ -993,7 +1024,11 @@ export default function RentalCommandCentre() {
       setFieldErrors({});
       setImportErrors({});
       setImportState('review');
-      setNotice({ tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) });
+      setNotice(
+        draft
+          ? { tone: 'info', message: t.notices.draftRestored }
+          : { tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) }
+      );
     } catch (error) {
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
@@ -1005,6 +1040,11 @@ export default function RentalCommandCentre() {
   }
 
   async function confirmImport() {
+    if (operationId === 'confirm-import' || importState === 'saving') return;
+    if (importCompleted) {
+      setNotice({ tone: 'info', message: t.notices.importAlreadyCompleted });
+      return;
+    }
     if (!reviewForm || !importFile || !extraction) return;
     if (!uploadedDocument) {
       setNotice({ tone: 'error', message: t.notices.documentUnavailable });
@@ -1081,21 +1121,45 @@ export default function RentalCommandCentre() {
       setCollections((current) => [collection, ...current]);
       setDocuments((current) => [savedDocument, ...current]);
       setSelectedTenancyId(savedTenancy.id);
+      // Refresh the Rental Command Centre so the dashboard totals reflect the new record.
       await loadRentalData();
       setSelectedTenancyId(savedTenancy.id);
-      setImportFile(null);
-      setExtraction(null);
-      setReviewForm(null);
-      setUploadedDocument(null);
+      setImportedTenancyId(savedTenancy.id);
+      clearReviewedDraft(workspaceId, form.documentId);
+      // Keep the reviewed panel mounted so it can present the imported success state and Open Tenancy action.
       setImportState('success');
-      resetForm();
-      setNotice({ tone: 'success', message: t.notices.importSaved });
+      setImportErrors({});
+      setNotice({ tone: 'success', message: t.notices.importSuccess });
     } catch (error) {
       setImportState('failed');
       setNotice({ tone: 'error', message: `${t.notices.importFailed} ${failedStage}: ${userError(error, language)}` });
     } finally {
       setOperationId(null);
     }
+  }
+
+  function saveDraft() {
+    if (!reviewForm) return;
+    try {
+      window.localStorage.setItem(tenancyDraftStorageKey(workspaceId, reviewForm.documentId), serializeReviewedDraft(reviewForm));
+    } catch {
+      // A blocked or full localStorage still leaves the reviewed values in memory for this session.
+    }
+    setNotice({ tone: 'success', message: t.notices.draftSaved });
+  }
+
+  function resetImport() {
+    setImportFile(null);
+    setExtraction(null);
+    setReviewForm(null);
+    setUploadedDocument(null);
+    setImportedTenancyId('');
+    setImportErrors({});
+    setImportFailedStage('');
+    setUploadProgress(null);
+    setImportState('idle');
+    userEditedFields.current.clear();
+    resetForm();
   }
 
   async function viewDocument(storagePath: string) {
@@ -1217,9 +1281,31 @@ export default function RentalCommandCentre() {
                     <pre>{extraction.rawText || t.notDetected}</pre>
                   </details>
                   {importState === 'failed' && <div className="notice error">{t.failedStage}: {importFailedStage || t.importIntoNexora}</div>}
-                  <button className="primary-button" onClick={confirmImport} disabled={!reviewForm || operationId === 'confirm-import'}>
-                    {operationId === 'confirm-import' ? t.importing : t.confirmImport}
-                  </button>
+                  {importCompleted ? (
+                    <div className="import-success" role="status">
+                      <div className="notice success">{t.notices.importSuccess}</div>
+                      <div className="document-meta-grid">
+                        <MemoryItem label={t.extractionStatus} value={t.importedStatus} fallback={t.notDetected} />
+                        <MemoryItem label={t.tenancyReference} value={importedTenancyId} fallback={t.notDetected} />
+                      </div>
+                      <div className="import-actions">
+                        <a className="primary-button" href={`/tenancies/${importedTenancyId}`}>{t.openTenancy}</a>
+                        {uploadedDocument && (
+                          <button className="secondary-button" onClick={() => viewDocument(uploadedDocument.storagePath)}>{t.viewDocument}</button>
+                        )}
+                        <button className="ghost-button" onClick={resetImport}>{t.startNewImport}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="import-actions">
+                      <button className="primary-button" onClick={confirmImport} disabled={!reviewForm || !canImportReviewed || operationId === 'confirm-import'}>
+                        {operationId === 'confirm-import' ? t.importing : t.importIntoNexora}
+                      </button>
+                      <button className="secondary-button" onClick={saveDraft} disabled={!reviewForm || operationId === 'confirm-import'}>
+                        {t.saveAsDraft}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

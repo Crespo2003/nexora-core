@@ -75,6 +75,15 @@ export function extractedTenancyContacts(value: unknown): ExtractedContactCandid
   });
 }
 
+/**
+ * Keeps only confirmed contacts: parties (tenant/landlord) plus any agent, witness,
+ * or law-firm record that carries an identifiable name or company. Phantom contacts
+ * with no confirmed identity are never linked to a tenancy on import.
+ */
+export function confirmedTenancyContacts(candidates: ExtractedContactCandidate[]): ExtractedContactCandidate[] {
+  return candidates.filter((item) => Boolean(item.name || item.company));
+}
+
 /** Creates only missing workspace contacts, roles, and tenancy links; existing CRM records are never overwritten. */
 export async function syncExtractedTenancyContacts(input: {
   supabase: ContactSyncClient;
@@ -82,7 +91,7 @@ export async function syncExtractedTenancyContacts(input: {
   tenancyId: string;
   extraction: unknown;
 }): Promise<{ linked: number; warnings: string[] }> {
-  const candidates = extractedTenancyContacts(input.extraction);
+  const candidates = confirmedTenancyContacts(extractedTenancyContacts(input.extraction));
   let linked = 0;
   const warnings: string[] = [];
   for (const item of candidates) {

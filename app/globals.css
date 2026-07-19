@@ -651,6 +651,35 @@ select {
   margin-top: 16px;
 }
 
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.import-actions .primary-button {
+  width: auto;
+  flex: 1 1 220px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.import-actions .secondary-button,
+.import-actions .ghost-button {
+  margin-top: 0;
+  text-decoration: none;
+}
+
+.import-success {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 10px;
+  padding: 14px;
+  background: rgba(34, 197, 94, 0.06);
+}
+
 .raw-text {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 8px;
