@@ -36,6 +36,7 @@ export type CanonicalDepositEvidence = {
   amount: number | null;
   basis: 'explicit_amount' | 'rental_multiple' | 'not_found';
   rental_multiple: number | null;
+  calculated_amount: number | null;
   source_page: number | null;
   source_excerpt: string;
   confidence: number;
@@ -662,11 +663,14 @@ function normalizeDepositEvidence(value: unknown, fallbackAmount: number | null)
     ? requestedBasis : amount === null ? 'not_found' : 'explicit_amount';
   const rawMultiple = source.rental_multiple;
   const rentalMultiple = rawMultiple === null || rawMultiple === undefined || rawMultiple === '' ? null : Number(rawMultiple);
+  const rawCalculated = source.calculated_amount;
+  const calculatedAmount = rawCalculated === null || rawCalculated === undefined || rawCalculated === '' ? null : Number(rawCalculated);
   const sourcePage = Number(source.source_page);
   return {
     amount,
     basis: amount === null ? 'not_found' : basis,
     rental_multiple: Number.isFinite(rentalMultiple) && rentalMultiple >= 0 ? rentalMultiple : null,
+    calculated_amount: Number.isFinite(calculatedAmount) && calculatedAmount >= 0 ? roundMoney(calculatedAmount) : null,
     source_page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : null,
     source_excerpt: normalizeText(source.source_excerpt).slice(0, extractionOutputLimits.excerptCharacters),
     confidence: normalizeConfidence(source.confidence),

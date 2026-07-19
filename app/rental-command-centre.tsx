@@ -1537,8 +1537,8 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
     ['Car park', deposits.car_park_deposit], ['Key', deposits.key_deposit], ['Renovation', deposits.renovation_deposit],
     ...deposits.other_deposits.map((item) => [item.label, item] as [string, DepositEvidence])
   ] : [];
-  const depositEvidence = depositFields.filter(([, item]) => item.amount !== null || item.source_excerpt).map(([label, item]) =>
-    `${label}: ${item.amount === null ? 'Not found' : formatMYR(item.amount)} (${item.basis}${item.rental_multiple !== null ? `, ${item.rental_multiple} month rental` : ''}${item.requires_review ? ', Requires confirmation' : ''}${item.source_page ? `, page ${item.source_page}` : ''})`
+  const depositEvidence = depositFields.filter(([, item]) => item.amount !== null || item.source_excerpt || item.requires_review).map(([label, item]) =>
+    `${label}: ${item.amount === null ? 'Not found' : formatMYR(item.amount)} (${item.basis}${item.rental_multiple !== null ? `, ${item.rental_multiple} month rental` : ''}${item.calculated_amount !== null ? `, calculated ${formatMYR(item.calculated_amount)}` : ''}${item.requires_review ? ', Requires confirmation' : ''}${item.source_page ? `, page ${item.source_page}` : ''})`
   );
   const notice = additional.notice_details;
   return (

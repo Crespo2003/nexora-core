@@ -43,6 +43,7 @@ export type DepositEvidence = {
   amount: number | null;
   basis: 'explicit_amount' | 'rental_multiple' | 'not_found';
   rental_multiple: number | null;
+  calculated_amount: number | null;
   source_page: number | null;
   source_excerpt: string;
   confidence: number;
@@ -404,36 +405,51 @@ export function enrichExtractedTenancyTerms(
     { field: 'car_park_deposit', label: 'Car park deposit', aliases: ['car park deposit', 'parking deposit', 'remote control deposit', 'car park remote deposit'] }
   ];
 
+  let suspiciousDepositFound = false;
   for (const deposit of deposits) {
     const existing = depositDetails[deposit.field];
     const explicit = findExplicitDepositAmount(rawText, deposit.aliases);
+    const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
+    const expected = multiple && monthlyRental !== null ? roundMoney(monthlyRental * multiple.months) : null;
+
+    // 1. An explicit RM amount written in the agreement always wins.
     if (explicit) {
-      const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
-      const expected = multiple && monthlyRental !== null ? roundMoney(monthlyRental * multiple.months) : null;
       const requiresReview = Boolean(expected !== null && Math.abs(expected - explicit.amount) > 1);
       financial[deposit.field] = explicit.amount;
       depositDetails[deposit.field] = {
-        amount: explicit.amount, basis: 'explicit_amount', rental_multiple: multiple?.months ?? null,
-        source_page: explicit.page, source_excerpt: explicit.excerpt, confidence: 98, requires_review: requiresReview
+        amount: explicit.amount, basis: 'explicit_amount', rental_multiple: multiple?.months ?? null, calculated_amount: expected,
+        source_page: explicit.page, source_excerpt: explicit.excerpt, confidence: requiresReview ? 60 : 98, requires_review: requiresReview
       };
-      evidence[`financial.${deposit.field}`] = { value: String(explicit.amount), confidence: 98, source_page: explicit.page, source_excerpt: explicit.excerpt };
-      if (requiresReview) warnings.push(`Requires confirmation: ${deposit.label.toLowerCase()} conflicts with the stated rental multiple.`);
+      evidence[`financial.${deposit.field}`] = { value: String(explicit.amount), confidence: requiresReview ? 60 : 98, source_page: explicit.page, source_excerpt: explicit.excerpt };
+      if (requiresReview) warnings.push(`Requires confirmation: ${deposit.label.toLowerCase()} of ${formatRinggit(explicit.amount)} conflicts with the stated ${multiple!.months}-month rental multiple (${formatRinggit(expected!)}).`);
+      continue;
+    }
+
+    // 2. No amount written, but a rental multiple is stated: derive depositAmount = multiple x monthly rental.
+    if (multiple !== null && monthlyRental !== null && expected !== null) {
+      financial[deposit.field] = expected;
+      depositDetails[deposit.field] = {
+        amount: expected, basis: 'rental_multiple', rental_multiple: multiple.months, calculated_amount: expected,
+        source_page: multiple.page, source_excerpt: multiple.excerpt, confidence: 88, requires_review: false
+      };
+      evidence[`financial.${deposit.field}`] = { value: String(expected), confidence: 88, source_page: multiple.page, source_excerpt: multiple.excerpt };
+      warnings.push(`${deposit.label} was calculated from the stated ${multiple.months}-month rental multiple (${formatRinggit(expected)}); verify the agreement wording.`);
+      continue;
+    }
+
+    // 3. A value the model supplied but the document does not back with an amount or multiple.
+    //    Reject implausibly small values that are really a rental multiple mis-read as Ringgit.
+    const candidateAmount = existing.amount !== null && existing.basis === 'explicit_amount' ? existing.amount : financial[deposit.field];
+    if (candidateAmount !== null && candidateAmount > 0 && isSuspiciousDepositAmount(candidateAmount, monthlyRental, rawText)) {
+      financial[deposit.field] = null;
+      depositDetails[deposit.field] = { ...defaultDepositEvidence(), requires_review: true };
+      warnings.push(`${deposit.label} of ${formatRinggit(candidateAmount)} looks too small for a monthly rental of ${formatRinggit(monthlyRental ?? 0)} and may be a rental multiple such as "${roundMoney(candidateAmount)} months". Enter the deposit manually from the agreement.`);
+      suspiciousDepositFound = true;
       continue;
     }
     if (existing.amount !== null && existing.basis === 'explicit_amount') {
       financial[deposit.field] = existing.amount;
-      continue;
     }
-    const multiple = findDepositRentalMultiple(rawText, deposit.aliases);
-    if (multiple === null || monthlyRental === null) continue;
-    const amount = roundMoney(monthlyRental * multiple.months);
-    financial[deposit.field] = amount;
-    depositDetails[deposit.field] = {
-      amount, basis: 'rental_multiple', rental_multiple: multiple.months,
-      source_page: multiple.page, source_excerpt: multiple.excerpt, confidence: 88, requires_review: false
-    };
-    evidence[`financial.${deposit.field}`] = { value: String(amount), confidence: 88, source_page: multiple.page, source_excerpt: multiple.excerpt };
-    warnings.push(`${deposit.label} was calculated from the stated ${multiple.months}-month rental multiple; verify the agreement wording.`);
   }
   for (const deposit of deposits) {
     if (financial[deposit.field] === 0 && depositDetails[deposit.field].amount === null) financial[deposit.field] = null;
@@ -444,7 +460,7 @@ export function enrichExtractedTenancyTerms(
   ]) {
     const explicit = findExplicitDepositAmount(rawText, deposit.aliases);
     if (explicit) depositDetails[deposit.key] = {
-      amount: explicit.amount, basis: 'explicit_amount', rental_multiple: null, source_page: explicit.page,
+      amount: explicit.amount, basis: 'explicit_amount', rental_multiple: null, calculated_amount: null, source_page: explicit.page,
       source_excerpt: explicit.excerpt, confidence: 98, requires_review: false
     };
   }
@@ -457,13 +473,15 @@ export function enrichExtractedTenancyTerms(
     if (!Number.isFinite(value) || value < 0) return [];
     const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(line.trim()), 'i'));
     return [{
-      label, amount: roundMoney(value), basis: 'explicit_amount' as const, rental_multiple: null,
+      label, amount: roundMoney(value), basis: 'explicit_amount' as const, rental_multiple: null, calculated_amount: null,
       source_page: source.page, source_excerpt: source.excerpt, confidence: 95, requires_review: false
     }];
   });
   depositDetails.other_deposits = uniqueDepositDetails([...depositDetails.other_deposits, ...otherDeposits]);
   const withDeposits = {
     ...extraction,
+    // A suspicious deposit that was rejected lowers overall confidence so the review step is not skipped.
+    confidence: suspiciousDepositFound ? roundMoney(Math.min(extraction.confidence, 0.6)) : extraction.confidence,
     financial,
     deposit_details: depositDetails,
     field_evidence: evidence,
@@ -473,7 +491,7 @@ export function enrichExtractedTenancyTerms(
 }
 
 function defaultDepositEvidence(): DepositEvidence {
-  return { amount: null, basis: 'not_found', rental_multiple: null, source_page: null, source_excerpt: '', confidence: 0, requires_review: false };
+  return { amount: null, basis: 'not_found', rental_multiple: null, calculated_amount: null, source_page: null, source_excerpt: '', confidence: 0, requires_review: false };
 }
 
 function defaultDepositDetails(): NonNullable<TenancyLegalIntelligence['deposit_details']> {
@@ -1009,8 +1027,10 @@ function normalizeDepositDetails(value: TenancyLegalIntelligence['deposit_detail
       ? item.basis : normalizedAmount === null ? 'not_found' : 'explicit_amount';
     const multiple = typeof item?.rental_multiple === 'number' && Number.isFinite(item.rental_multiple) && item.rental_multiple >= 0
       ? item.rental_multiple : null;
+    const calculated = typeof item?.calculated_amount === 'number' && Number.isFinite(item.calculated_amount) && item.calculated_amount >= 0
+      ? roundMoney(item.calculated_amount) : null;
     return {
-      amount: normalizedAmount, basis: normalizedAmount === null ? 'not_found' : basis, rental_multiple: multiple,
+      amount: normalizedAmount, basis: normalizedAmount === null ? 'not_found' : basis, rental_multiple: multiple, calculated_amount: calculated,
       source_page: Number.isInteger(item?.source_page) && Number(item?.source_page) > 0 ? Number(item?.source_page) : null,
       source_excerpt: extractionText(item?.source_excerpt).slice(0, 500),
       confidence: Math.max(0, Math.min(100, Number(item?.confidence) || 0)),
@@ -1352,21 +1372,79 @@ function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount
   return null;
 }
 
+// A rental multiple such as "two (2) months", "half (1/2) month", "0.5 month" or "1/2 month".
+const monthMultiplePattern = '(?:half|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\\d+\\s*/\\s*\\d+|\\d+(?:\\.\\d+)?)\\s*(?:\\(\\s*(?:\\d+\\s*/\\s*\\d+|\\d+(?:\\.\\d+)?)\\s*\\))?\\s*months?';
+
+/**
+ * Reads a rental multiple that a deposit is expressed in (e.g. "two (2) months' security deposit",
+ * "half (1/2) month utility deposit", or "equivalent to two months' rental"). Deposits are capped at
+ * six months so a tenancy term such as "12 months" is never mistaken for a deposit multiple.
+ */
 function findDepositRentalMultiple(rawText: string, aliases: string[]): { months: number; page: number | null; excerpt: string } | null {
   const label = aliases.map(escapeRegExp).join('|');
-  const multiplier = '(?:half|0\\.5|one|two|three|four|five|six|seven|eight|nine|ten|twelve|\\d+(?:\\.\\d+)?)';
-  const term = `${multiplier}\\s*(?:\\(\\s*\\d+(?:\\.\\d+)?\\s*\\))?\\s*months?\\b(?:\\'s|\\')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)`;
-  const labelFirst = new RegExp(`(?:${label})[\\s\\S]{0,140}?${term}`, 'i');
-  const termFirst = new RegExp(`${term}[\\s\\S]{0,90}?(?:${label})`, 'i');
-  const match = rawText.match(labelFirst) ?? rawText.match(termFirst);
+  const patterns = [
+    // A multiple sitting immediately beside the deposit label, in either order.
+    new RegExp(`(?:${label})[\\s\\S]{0,60}?${monthMultiplePattern}`, 'i'),
+    new RegExp(`${monthMultiplePattern}[\\s\\S]{0,60}?(?:${label})`, 'i'),
+    // "<multiple> month(s) [of] [the] [monthly] rental/rent" phrasing.
+    new RegExp(`${monthMultiplePattern}(?:'s|')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)\\b`, 'i')
+  ];
+  let match: RegExpMatchArray | null = null;
+  for (const pattern of patterns) {
+    match = rawText.match(pattern);
+    if (match) break;
+  }
   if (!match) return null;
-  const value = match[0].match(new RegExp(`\\b(${multiplier})\\s*(?:\\(\\s*\\d+(?:\\.\\d+)?\\s*\\))?\\s*months?\\b`, 'i'))?.[1]?.toLowerCase();
-  if (!value) return null;
-  const words: Record<string, number> = { half: 0.5, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
-  const months = words[value] ?? Number(value);
-  if (!Number.isFinite(months) || months <= 0 || months > 24) return null;
+  const monthPhrase = match[0].match(new RegExp(monthMultiplePattern, 'i'))?.[0] ?? '';
+  const months = parseMonthCount(monthPhrase);
+  if (months === null || months <= 0 || months > 6) return null;
   const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(match[0]), 'i'));
   return { months, page: source.page, excerpt: source.excerpt };
+}
+
+/** Converts a worded, fractional, or decimal month phrase into a number of months. */
+function parseMonthCount(phrase: string): number | null {
+  const words: Record<string, number> = { half: 0.5, quarter: 0.25, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+  const lower = phrase.toLowerCase();
+  const word = lower.match(/\b(half|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/);
+  if (word) return words[word[1]];
+  const fraction = lower.match(/(\d+)\s*\/\s*(\d+)/);
+  if (fraction) {
+    const numerator = Number(fraction[1]);
+    const denominator = Number(fraction[2]);
+    return denominator > 0 ? roundMoney(numerator / denominator) : null;
+  }
+  const decimal = lower.match(/(\d+(?:\.\d+)?)/);
+  if (decimal) {
+    const value = Number(decimal[1]);
+    return Number.isFinite(value) ? value : null;
+  }
+  return null;
+}
+
+/**
+ * A deposit is suspicious when the monthly rental is meaningful (> RM 100) yet the deposit is a tiny
+ * amount (RM 0.01 to RM 20.00) that the document does not state as that exact Ringgit figure. Such a
+ * value is almost always a rental multiple (e.g. "3 months") that was mis-read as RM 3.
+ */
+function isSuspiciousDepositAmount(amount: number | null, monthlyRental: number | null, rawText: string): boolean {
+  if (amount === null || amount <= 0) return false;
+  if (monthlyRental === null || monthlyRental <= 100) return false;
+  if (amount < 0.01 || amount > 20) return false;
+  return !documentStatesExactRinggitAmount(rawText, amount);
+}
+
+/** True when the agreement writes the exact RM amount (e.g. RM 3, RM 3.00, RM3.00, MYR 3). */
+function documentStatesExactRinggitAmount(rawText: string, amount: number): boolean {
+  for (const match of rawText.matchAll(/\b(?:RM|MYR|Ringgit(?:\s+Malaysia)?)\s*([\d,]+(?:\.\d{1,2})?)\b/gi)) {
+    const value = Number(match[1].replace(/,/g, ''));
+    if (Number.isFinite(value) && Math.abs(value - amount) < 0.005) return true;
+  }
+  return false;
+}
+
+function formatRinggit(value: number): string {
+  return `RM ${formatMoney(value)}`;
 }
 
 function escapeRegExp(value: string): string {

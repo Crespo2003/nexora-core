@@ -192,8 +192,17 @@ export function mergeMappedFormPreservingEdits(
 export function normalizeMoney(input: unknown, monthlyRental: MappedMoney = ''): MappedMoney {
   const raw = value(input);
   if (!raw) return '';
-  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:months?|months?'?\s+rent|个月|個月)/i);
-  if (months && monthlyRental !== '') return roundMoney(Number(months[1]) * monthlyRental);
+  // A rental multiple ("2 months' rental") or a plain month count ("3 months") must never be read as a
+  // currency amount. Only convert when it clearly states a rental multiple and the monthly rental is known;
+  // otherwise leave it blank so "3 months" can never become RM 3.
+  if (/months?\b|个月|個月/i.test(raw)) {
+    const rentalMultiple = raw.match(/(\d+(?:\.\d+)?|half)\s*(?:\(\s*\d+(?:\.\d+)?\s*\))?\s*(?:months?|个月|個月)(?:'s|')?\s*(?:of\s*)?(?:the\s*)?(?:monthly\s*)?(?:rental|rent|租金)/i);
+    if (rentalMultiple && monthlyRental !== '') {
+      const months = rentalMultiple[1].toLowerCase() === 'half' ? 0.5 : Number(rentalMultiple[1]);
+      return Number.isFinite(months) && months > 0 ? roundMoney(months * monthlyRental) : '';
+    }
+    return '';
+  }
   const parsed = Number(raw.replace(/\bMYR\b|RM/gi, '').replace(/[,\s]/g, '').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(parsed) && parsed >= 0 ? roundMoney(parsed) : '';
 }
