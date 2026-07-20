@@ -117,7 +117,12 @@ export const documentTranslations = {
     stageReview: 'Review',
     stageCorrect: 'Correct',
     stageSave: 'Save',
-    stageCompleted: 'Completed'
+    stageCompleted: 'Completed',
+    deleteDocument: 'Delete Document',
+    confirmDeleteDocument: 'Delete this document permanently? This cannot be undone.',
+    documentDeleted: 'Document deleted successfully.',
+    documentLinkedCannotDelete: 'This document is linked to an active tenancy and cannot be deleted directly.',
+    documentDeleteFailed: 'Document deletion failed. Please try again.'
   },
   zh: {
     navRental: '租金管理中心',
@@ -235,7 +240,12 @@ export const documentTranslations = {
     stageReview: '审核',
     stageCorrect: '修正',
     stageSave: '保存',
-    stageCompleted: '完成'
+    stageCompleted: '完成',
+    deleteDocument: '删除文件',
+    confirmDeleteDocument: '确定要永久删除此文件吗？此操作无法撤销。',
+    documentDeleted: '文件已成功删除。',
+    documentLinkedCannotDelete: '此文件已链接至有效的租赁协议，无法直接删除。',
+    documentDeleteFailed: '文件删除失败，请重试。'
   }
 } as const;
 
