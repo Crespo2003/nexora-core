@@ -451,11 +451,7 @@ export default function DocumentsPage() {
     setQueue((current) => current.map((item) => item.id === itemId && item.status === 'queued' ? { ...item, status: 'cancelled', progress: 100 } : item));
   }
 
-  async function deleteDocument(documentId: string, linkedStatus: string) {
-    if (linkedStatus === 'linked') {
-      setNotice({ tone: 'error', message: t.documentLinkedCannotDelete });
-      return;
-    }
+  async function deleteDocument(documentId: string) {
     if (!window.confirm(t.confirmDeleteDocument)) return;
     setOperationId(`delete-${documentId}`);
     try {
@@ -748,7 +744,7 @@ function DocumentReview({
   onDraft: () => void;
   onImport: () => void;
   onSignedUrl: (documentId: string, disposition: 'inline' | 'attachment') => void;
-  onDelete: (documentId: string, linkedStatus: string) => void;
+  onDelete: (documentId: string) => void;
 }) {
   const t = getDocumentTranslations(language);
   const extraction = document.extraction?.extractedJson as TenancyExtraction | undefined;
@@ -776,7 +772,7 @@ function DocumentReview({
       <div className="card-actions review-actions">
         <button className="ghost-button" onClick={() => onSignedUrl(document.id, 'inline')} disabled={operationId === `inline-${document.id}`}>{t.viewDocument}</button>
         <button className="ghost-button" onClick={() => onSignedUrl(document.id, 'attachment')} disabled={operationId === `attachment-${document.id}`}>{t.downloadDocument}</button>
-        <button className="ghost-button" onClick={() => onDelete(document.id, document.linkedStatus)} disabled={operationId === `delete-${document.id}`}>{t.deleteDocument}</button>
+        <button className="ghost-button" onClick={() => onDelete(document.id)} disabled={operationId === `delete-${document.id}`}>{t.deleteDocument}</button>
       </div>
 
       <div>

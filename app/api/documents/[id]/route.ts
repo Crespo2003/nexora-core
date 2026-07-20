@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { reconcileDocumentLinkedStatus } from '../../../../lib/documents/reconcile';
 
 export async function DELETE(request: Request, { params }: { params: { id: string } }) {
   try {
@@ -13,40 +14,11 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
     if (document.error) throw document.error;
     if (!document.data) return NextResponse.json({ error: 'document-not-found' }, { status: 404 });
 
-    // Reality check 1: tenancy_documents has a row for this storage_path with tenancy_id IS NOT NULL.
-    // This covers the legacy upload path; the FK ON DELETE SET NULL keeps this accurate automatically.
-    const tdCheck = await supabase
-      .from('tenancy_documents')
-      .select('id')
-      .eq('storage_path', document.data.storage_path)
-      .not('tenancy_id', 'is', null)
-      .limit(1);
-    if (tdCheck.error) throw tdCheck.error;
+    // Reconcile: removes stale document_links, checks both link paths, syncs linked_status.
+    // Returns which documents are still actively linked to a real tenancy in this workspace.
+    const { linkedDocumentIds } = await reconcileDocumentLinkedStatus(supabase, workspaceId, [params.id]);
 
-    // Reality check 2: document_links has a row pointing to a tenancy that still exists.
-    // This covers the new import path (document_links.entity_id has no FK and is not cascade-deleted).
-    let hasActiveTenancyLink = (tdCheck.data?.length ?? 0) > 0;
-    if (!hasActiveTenancyLink) {
-      const dlLinks = await supabase
-        .from('document_links')
-        .select('entity_id')
-        .eq('document_id', params.id)
-        .eq('entity_type', 'tenancy');
-      if (dlLinks.error) throw dlLinks.error;
-      if (dlLinks.data?.length) {
-        const tenancyIds = dlLinks.data.map((r) => r.entity_id as string);
-        const tenancyCheck = await supabase
-          .from('tenancies')
-          .select('id')
-          .in('id', tenancyIds)
-          .eq('workspace_id', workspaceId)
-          .limit(1);
-        if (tenancyCheck.error) throw tenancyCheck.error;
-        hasActiveTenancyLink = (tenancyCheck.data?.length ?? 0) > 0;
-      }
-    }
-
-    if (hasActiveTenancyLink) {
+    if (linkedDocumentIds.has(params.id)) {
       return NextResponse.json({ error: 'linked-document' }, { status: 409 });
     }
 

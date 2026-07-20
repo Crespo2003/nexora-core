@@ -5,6 +5,7 @@ import type { DocumentRecord, TimelineEvent } from '../../../../lib/tenancy-work
 import { buildWorkspaceWarnings, tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { currentIsoDate, normalizeDateForStorage } from '../../../../lib/dates/formatDate';
+import { reconcileDocumentLinkedStatus } from '../../../../lib/documents/reconcile';
 
 const editableTenancyFields = new Set([
   'tenant', 'tenant_id_no', 'tenant_phone', 'tenant_email', 'tenant_nationality',
@@ -331,9 +332,9 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
     if (auth instanceof Response) return auth;
     const { supabase, workspaceId } = auth;
 
-    // Capture linked documents BEFORE deletion — queried here because:
+    // Capture linked document IDs BEFORE deletion because:
     //   • tenancy_documents.tenancy_id will be SET NULL by the FK rule after deletion
-    //   • document_links.entity_id has no FK and will persist, so we also capture those
+    //   • document_links.entity_id has no FK and persists as an orphan after deletion
     const dlLinks = await supabase
       .from('document_links')
       .select('document_id')
@@ -348,18 +349,25 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
     const { error } = await supabase.from('tenancies').delete().eq('id', params.id);
     if (error) throw error;
 
-    // Sync linked_status to 'unlinked' for documents that were linked to this tenancy.
-    // Best-effort: failure here does not roll back the successful tenancy deletion.
+    // Reconcile affected documents: deletes stale document_links and syncs linked_status.
+    // Best-effort — failure here does not roll back the successful tenancy deletion.
     const affectedDocIds = new Set<string>();
-    for (const row of dlLinks.data ?? []) { affectedDocIds.add(row.document_id as string); }
+    for (const row of (dlLinks.data ?? []) as Array<{ document_id: string }>) {
+      affectedDocIds.add(row.document_id);
+    }
     if (tdLinks.data?.length) {
-      const paths = tdLinks.data.map((r) => r.storage_path as string);
-      const docsAtPaths = await supabase.from('documents').select('id').in('storage_path', paths).eq('workspace_id', workspaceId);
-      for (const row of docsAtPaths.data ?? []) { affectedDocIds.add(row.id as string); }
+      const paths = (tdLinks.data as Array<{ storage_path: string }>).map((r) => r.storage_path);
+      const docsAtPaths = await supabase
+        .from('documents')
+        .select('id')
+        .in('storage_path', paths)
+        .eq('workspace_id', workspaceId);
+      for (const row of (docsAtPaths.data ?? []) as Array<{ id: string }>) {
+        affectedDocIds.add(row.id);
+      }
     }
     if (affectedDocIds.size > 0) {
-      await supabase.from('documents').update({ linked_status: 'unlinked' })
-        .in('id', [...affectedDocIds]).eq('workspace_id', workspaceId).eq('linked_status', 'linked');
+      await reconcileDocumentLinkedStatus(supabase, workspaceId, [...affectedDocIds]);
     }
 
     return NextResponse.json({ ok: true });

@@ -6,16 +6,18 @@ const deleteRoute = readFileSync('app/api/documents/[id]/route.ts', 'utf8');
 const uploadRoute = readFileSync('app/api/documents/upload/route.ts', 'utf8');
 const documentsPage = readFileSync('app/documents/page.tsx', 'utf8');
 const documentTranslations = readFileSync('lib/i18n/documentTranslations.ts', 'utf8');
+const reconcileModule = readFileSync('lib/documents/reconcile.ts', 'utf8');
 const sprint002Migration = readFileSync('supabase/migrations/202607130002_sprint_002_ai_document_centre.sql', 'utf8');
 const persistenceMigration = readFileSync('supabase/migrations/202607171300_upload_end_to_end_persistence.sql', 'utf8');
 
 // 1. Deleting an unlinked document removes it from the active documents set.
-// The route checks reality (tenancy_documents + document_links) rather than the cached linked_status flag.
-test('delete route hard-deletes the row only when no active tenancy link is found', () => {
+// The route delegates link checking to reconcileDocumentLinkedStatus, not inline queries.
+test('delete route hard-deletes the row only when reconcile confirms no active tenancy link', () => {
   assert.ok(deleteRoute.includes('linked-document'), 'linked-document error code is required');
-  assert.ok(deleteRoute.includes('tenancy_documents'), 'delete route must check tenancy_documents for live links');
+  assert.ok(deleteRoute.includes('reconcileDocumentLinkedStatus'), 'delete route must call the reconcile helper');
+  assert.ok(deleteRoute.includes('linkedDocumentIds'), 'delete route must use the reconcile result to check active links');
   assert.ok(deleteRoute.includes('.delete()'), 'DB hard-delete call is missing');
-  assert.match(deleteRoute, /\.delete\(\)/, 'delete must be present');
+  assert.ok(reconcileModule.includes('tenancy_documents'), 'reconcile module must check tenancy_documents for legacy active links');
 });
 
 // 2. The same file can be uploaded again after deletion.
@@ -35,14 +37,14 @@ test('upload route returns 409 duplicate-document when the hash already exists',
 });
 
 // 4. A document linked to an active tenancy cannot be silently deleted.
-// The route performs a reality check: tenancy_documents.tenancy_id IS NOT NULL, or
-// document_links rows that join to existing tenancies — it does not trust the cached linked_status.
+// The reconcile helper performs both reality checks; the route inspects its returned Set.
 test('delete route rejects deletion of linked documents with 409 and linked-document error code', () => {
   assert.ok(deleteRoute.includes('linked-document'), 'linked-document error code must be returned');
   assert.match(deleteRoute, /status.*409/, 'HTTP 409 required for linked-document rejection');
-  assert.ok(deleteRoute.includes('tenancy_documents'), 'reality check 1: must query tenancy_documents for non-null tenancy_id');
-  assert.ok(deleteRoute.includes('document_links'), 'reality check 2: must query document_links for remaining tenancy ref');
-  assert.ok(deleteRoute.includes('tenancies'), 'reality check 2: must verify tenancy row still exists in tenancies table');
+  assert.ok(deleteRoute.includes('reconcileDocumentLinkedStatus'), 'route must delegate link check to reconcile helper');
+  assert.ok(reconcileModule.includes('document_links'), 'reconcile must query document_links for active tenancy refs');
+  assert.ok(reconcileModule.includes('tenancies'), 'reconcile must verify tenancy row still exists');
+  assert.ok(reconcileModule.includes('tenancy_documents'), 'reconcile must check legacy tenancy_documents path');
 });
 
 // 5. Cross-workspace deletion is blocked.
@@ -75,10 +77,13 @@ test('schema declares ON DELETE CASCADE for document-dependent tables', () => {
 });
 
 // 8. Document Centre exposes a delete handler with all required bilingual messages.
+// The frontend must not apply a stale client-side block based on cached linked_status.
 test('Document Centre page has a deleteDocument handler and all bilingual delete messages are present', () => {
   assert.ok(documentsPage.includes('deleteDocument'), 'deleteDocument handler missing from documents page');
   assert.ok(documentsPage.includes('onDelete'), 'onDelete prop missing from DocumentReview usage');
   assert.ok(documentsPage.includes('linked-document'), 'linked-document server error must be handled in the page');
+  assert.ok(!documentsPage.includes("deleteDocument(documentId: string, linkedStatus"), 'deleteDocument must not accept linkedStatus param — stale client-side gate removed');
+  assert.ok(!documentsPage.includes('onDelete(document.id, document.linkedStatus)'), 'onDelete must not forward cached linkedStatus to delete — let server decide');
   assert.ok(documentTranslations.includes('documentDeleted'), 'documentDeleted translation key missing');
   assert.ok(documentTranslations.includes('documentLinkedCannotDelete'), 'documentLinkedCannotDelete translation key missing');
   assert.ok(documentTranslations.includes('documentDeleteFailed'), 'documentDeleteFailed translation key missing');
