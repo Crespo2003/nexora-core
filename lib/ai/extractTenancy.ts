@@ -447,6 +447,17 @@ export function enrichExtractedTenancyTerms(
       suspiciousDepositFound = true;
       continue;
     }
+    // 4. A model-supplied value that exactly equals the monthly rental with no document evidence
+    //    for this deposit field is almost always the model copying monthly_rental into a deposit
+    //    slot. Reject it so the user is prompted to enter the correct value manually.
+    if (candidateAmount !== null && candidateAmount > 0 && monthlyRental !== null
+        && Math.abs(candidateAmount - monthlyRental) < 0.01) {
+      financial[deposit.field] = null;
+      depositDetails[deposit.field] = { ...defaultDepositEvidence(), requires_review: true };
+      warnings.push(`${deposit.label} of ${formatRinggit(candidateAmount)} matches the monthly rental exactly but has no document evidence for this deposit type; it may be a model error. Enter the deposit amount manually from the agreement.`);
+      suspiciousDepositFound = true;
+      continue;
+    }
     if (existing.amount !== null && existing.basis === 'explicit_amount') {
       financial[deposit.field] = existing.amount;
     }
@@ -1438,7 +1449,14 @@ function isSuspiciousDepositAmount(amount: number | null, monthlyRental: number 
 function documentStatesExactRinggitAmount(rawText: string, amount: number): boolean {
   for (const match of rawText.matchAll(/\b(?:RM|MYR|Ringgit(?:\s+Malaysia)?)\s*([\d,]+(?:\.\d{1,2})?)\b/gi)) {
     const value = Number(match[1].replace(/,/g, ''));
-    if (Number.isFinite(value) && Math.abs(value - amount) < 0.005) return true;
+    if (!Number.isFinite(value) || Math.abs(value - amount) >= 0.005) continue;
+    // Guard against a false positive when "RM 3,600" is split across a PDF line break and
+    // extracted as "RM 3\n,600": if the next non-whitespace characters after the match are
+    // ",<digit>", the captured amount is the leading fragment of a larger thousands-separated
+    // value and should not be treated as a standalone Ringgit amount.
+    const afterMatch = rawText.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 10);
+    if (/^\s*,\d/.test(afterMatch)) continue;
+    return true;
   }
   return false;
 }
