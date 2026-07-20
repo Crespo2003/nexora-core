@@ -10,10 +10,10 @@ const sprint002Migration = readFileSync('supabase/migrations/202607130002_sprint
 const persistenceMigration = readFileSync('supabase/migrations/202607171300_upload_end_to_end_persistence.sql', 'utf8');
 
 // 1. Deleting an unlinked document removes it from the active documents set.
-// The route only proceeds to hard-delete when linked_status is not 'linked'.
-test('delete route hard-deletes the row only when the document is unlinked', () => {
-  assert.ok(deleteRoute.includes('linked_status'), 'linked_status must be selected from the documents row');
+// The route checks reality (tenancy_documents + document_links) rather than the cached linked_status flag.
+test('delete route hard-deletes the row only when no active tenancy link is found', () => {
   assert.ok(deleteRoute.includes('linked-document'), 'linked-document error code is required');
+  assert.ok(deleteRoute.includes('tenancy_documents'), 'delete route must check tenancy_documents for live links');
   assert.ok(deleteRoute.includes('.delete()'), 'DB hard-delete call is missing');
   assert.match(deleteRoute, /\.delete\(\)/, 'delete must be present');
 });
@@ -35,10 +35,14 @@ test('upload route returns 409 duplicate-document when the hash already exists',
 });
 
 // 4. A document linked to an active tenancy cannot be silently deleted.
+// The route performs a reality check: tenancy_documents.tenancy_id IS NOT NULL, or
+// document_links rows that join to existing tenancies — it does not trust the cached linked_status.
 test('delete route rejects deletion of linked documents with 409 and linked-document error code', () => {
   assert.ok(deleteRoute.includes('linked-document'), 'linked-document error code must be returned');
   assert.match(deleteRoute, /status.*409/, 'HTTP 409 required for linked-document rejection');
-  assert.ok(deleteRoute.includes("'linked'"), 'must compare linked_status against the string "linked"');
+  assert.ok(deleteRoute.includes('tenancy_documents'), 'reality check 1: must query tenancy_documents for non-null tenancy_id');
+  assert.ok(deleteRoute.includes('document_links'), 'reality check 2: must query document_links for remaining tenancy ref');
+  assert.ok(deleteRoute.includes('tenancies'), 'reality check 2: must verify tenancy row still exists in tenancies table');
 });
 
 // 5. Cross-workspace deletion is blocked.

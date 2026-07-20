@@ -329,9 +329,38 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
   try {
     const auth = await requireWorkspaceAccess(['owner', 'admin'], request);
     if (auth instanceof Response) return auth;
-    const { supabase } = auth;
+    const { supabase, workspaceId } = auth;
+
+    // Capture linked documents BEFORE deletion — queried here because:
+    //   • tenancy_documents.tenancy_id will be SET NULL by the FK rule after deletion
+    //   • document_links.entity_id has no FK and will persist, so we also capture those
+    const dlLinks = await supabase
+      .from('document_links')
+      .select('document_id')
+      .eq('entity_type', 'tenancy')
+      .eq('entity_id', params.id);
+    const tdLinks = await supabase
+      .from('tenancy_documents')
+      .select('storage_path')
+      .eq('tenancy_id', params.id)
+      .eq('workspace_id', workspaceId);
+
     const { error } = await supabase.from('tenancies').delete().eq('id', params.id);
     if (error) throw error;
+
+    // Sync linked_status to 'unlinked' for documents that were linked to this tenancy.
+    // Best-effort: failure here does not roll back the successful tenancy deletion.
+    const affectedDocIds = new Set<string>();
+    for (const row of dlLinks.data ?? []) { affectedDocIds.add(row.document_id as string); }
+    if (tdLinks.data?.length) {
+      const paths = tdLinks.data.map((r) => r.storage_path as string);
+      const docsAtPaths = await supabase.from('documents').select('id').in('storage_path', paths).eq('workspace_id', workspaceId);
+      for (const row of docsAtPaths.data ?? []) { affectedDocIds.add(row.id as string); }
+    }
+    if (affectedDocIds.size > 0) {
+      await supabase.from('documents').update({ linked_status: 'unlinked' })
+        .in('id', [...affectedDocIds]).eq('workspace_id', workspaceId).eq('linked_status', 'linked');
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
