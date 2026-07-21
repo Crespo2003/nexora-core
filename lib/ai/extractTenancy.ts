@@ -1367,8 +1367,21 @@ function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount
     const labelMatch = line.match(labelPattern);
     if (!labelMatch || labelMatch.index === undefined) continue;
     const sameLineAmount = line.match(amountPattern);
-    const nextLineAmount = !sameLineAmount && lines[index + 1]?.trim().match(amountPattern);
-    const amountMatch = sameLineAmount ?? nextLineAmount;
+    // Many Malaysian TA schedules have a blank line (or a parenthetical clause line) between
+    // the deposit label and the "Ringgit Malaysia (RM X.XX)" amount line. Scan the next 3
+    // lines; stop early if another deposit label is encountered to avoid cross-contamination.
+    let nearbyAmount: RegExpMatchArray | null = null;
+    let nearbyOffset = 1;
+    if (!sameLineAmount) {
+      for (let j = 1; j <= 3; j++) {
+        const candidate = lines[index + j]?.trim();
+        if (candidate === undefined) break;
+        if (candidate && /\bdeposit\b/i.test(candidate) && !amountPattern.test(candidate)) break;
+        const m = candidate ? candidate.match(amountPattern) : null;
+        if (m) { nearbyAmount = m; nearbyOffset = j; break; }
+      }
+    }
+    const amountMatch = sameLineAmount ?? nearbyAmount;
     if (!amountMatch && !noDepositPattern.test(line)) continue;
     if (!amountMatch) {
       const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(line.trim()), 'i'));
@@ -1376,7 +1389,7 @@ function findExplicitDepositAmount(rawText: string, aliases: string[]): { amount
     }
     const amount = Number(amountMatch[1].replace(/,/g, ''));
     if (!Number.isFinite(amount) || amount < 0) continue;
-    const excerpt = sameLineAmount ? line : `${line} ${lines[index + 1]}`;
+    const excerpt = sameLineAmount ? line : `${line} ${lines[index + nearbyOffset] ?? ''}`;
     const source = findSourceExcerpt(rawText, new RegExp(escapeRegExp(excerpt.trim()), 'i'));
     return { amount: roundMoney(amount), page: source.page, excerpt: source.excerpt };
   }
@@ -1401,10 +1414,10 @@ function findDepositRentalMultiple(rawText: string, aliases: string[]): { months
   const patterns = [
     // A multiple sitting immediately beside the deposit label, in either order.
     new RegExp(`(?:${label})[\\s\\S]{0,60}?${monthMultiplePattern}`, 'i'),
-    new RegExp(`${monthMultiplePattern}[\\s\\S]{0,60}?(?:${label})`, 'i'),
+    new RegExp(`${monthMultiplePattern}[^\\r\\n]{0,40}(?:\\r?\\n[^\\r\\n]{0,40})?(?:${label})`, 'i'),
     // "<multiple> month(s) [of] [the] [monthly] rental/rent" phrasing — only used when the deposit
     // label appears somewhere in the document to avoid cross-contamination between deposit types.
-    ...(aliasPresent ? [new RegExp(`${monthMultiplePattern}(?:'s|')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)\\b`, 'i')] : [])
+    ...(aliasPresent ? [new RegExp(`${monthMultiplePattern}(?:'s?\\s+|\\s+(?:of\\s+(?:the\\s+)?)?)(monthly\\s+)?(?:rental|rent)\\b`, 'i')] : [])
   ];
   let match: RegExpMatchArray | null = null;
   for (const pattern of patterns) {
