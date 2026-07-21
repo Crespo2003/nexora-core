@@ -121,6 +121,14 @@ function storedExtractionForReview(
   } as unknown as Awaited<ReturnType<typeof extractTenancyFile>>;
 }
 
+function normalizeFinalTenancyFinancials(
+  extraction: Awaited<ReturnType<typeof extractTenancyFile>>
+): Awaited<ReturnType<typeof extractTenancyFile>> {
+  if (!extraction.rawText) return extraction;
+  const enrichedLegal = enrichExtractedTenancyTerms(extraction.legalIntelligence, extraction.rawText);
+  return { ...extraction, legalIntelligence: enrichedLegal };
+}
+
 function sanitizeStorageFilename(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? 'document';
   const base = filename.replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -455,7 +463,8 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         if (latestExtraction.error) throw latestExtraction.error;
 
         const reusableLegalData = reusableLegalIntelligence(latestExtraction.data?.extracted_json);
-        if (latestExtraction.data && reusableLegalData) {
+        const storedRawText = latestExtraction.data?.raw_text ?? '';
+        if (latestExtraction.data && reusableLegalData && storedRawText) {
           const existingLink = await supabase.from('document_links')
             .select('entity_id')
             .eq('workspace_id', workspaceId)
@@ -466,7 +475,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
             .maybeSingle();
           if (existingLink.error) throw existingLink.error;
 
-          const extraction = storedExtractionForReview(latestExtraction.data as ExistingExtraction, existingDocument);
+          const extraction = normalizeFinalTenancyFinancials(storedExtractionForReview(latestExtraction.data as ExistingExtraction, existingDocument));
           stage = 'mapping';
           logExtractionDiagnostic('existing_document_reused', {
             requestId,
@@ -504,7 +513,14 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
           });
         }
 
-        if (!retryableDocumentStatuses.includes(String(existingDocument.processing_status)) || !existingDocument.storage_path) {
+        const staleExtractionRequiresRecompute = Boolean(latestExtraction.data && reusableLegalData && !storedRawText && existingDocument.storage_path);
+        if (!staleExtractionRequiresRecompute && (!retryableDocumentStatuses.includes(String(existingDocument.processing_status)) || !existingDocument.storage_path)) {
+          return fail(409, 'database', 'duplicate-document', {
+            documentId: existingDocument.id,
+            retryAllowed: false
+          });
+        }
+        if (!existingDocument.storage_path) {
           return fail(409, 'database', 'duplicate-document', {
             documentId: existingDocument.id,
             retryAllowed: false
@@ -638,28 +654,29 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         aiCallCount,
         elapsedMs: Date.now() - startedAt
       });
+      const finalExtraction = normalizeFinalTenancyFinancials(extraction);
       return respond(200, {
         success: true,
         reused: Boolean(existingDocument),
         requestId,
-        provider: extraction.provider,
-        model: extraction.provider === 'openai' ? extraction.document.model : null,
-        fallbackUsed: extraction.fallbackUsed,
-        fallbackReason: extraction.fallbackReason,
+        provider: finalExtraction.provider,
+        model: finalExtraction.provider === 'openai' ? finalExtraction.document.model : null,
+        fallbackUsed: finalExtraction.fallbackUsed,
+        fallbackReason: finalExtraction.fallbackReason,
         documentId: existingDocument?.id ?? uploadedStorageReference,
         extractionId: '',
         tenancyId: '',
-        extraction,
-        summary: extraction.summary,
-        risks: extraction.legalIntelligence.risks,
-        warnings: existingDocument ? ['Existing document reused'] : extraction.legalIntelligence.warnings,
-        confidence: extraction.legalIntelligence.confidence,
+        extraction: finalExtraction,
+        summary: finalExtraction.summary,
+        risks: finalExtraction.legalIntelligence.risks,
+        warnings: existingDocument ? ['Existing document reused'] : finalExtraction.legalIntelligence.warnings,
+        confidence: finalExtraction.legalIntelligence.confidence,
         document: {
           originalFilename: existingDocument?.original_filename ?? fileName,
           storagePath,
           mimeType: existingDocument?.mime_type ?? mimeType,
           fileSize: existingDocument?.file_size ?? fileSize,
-          documentType: existingDocument?.document_type ?? extraction.document.documentType,
+          documentType: existingDocument?.document_type ?? finalExtraction.document.documentType,
           uploadStatus: existingDocument?.upload_status ?? 'uploaded',
           documentHash: existingDocument?.document_hash ?? documentHash
         }
