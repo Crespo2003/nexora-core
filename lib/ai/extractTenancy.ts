@@ -1393,12 +1393,18 @@ const monthMultiplePattern = '(?:half|quarter|one|two|three|four|five|six|seven|
  */
 function findDepositRentalMultiple(rawText: string, aliases: string[]): { months: number; page: number | null; excerpt: string } | null {
   const label = aliases.map(escapeRegExp).join('|');
+  // Pattern 3 below is label-agnostic (matches "X months' rental" anywhere). Only use it when the
+  // deposit type is actually mentioned in the document; otherwise it wrongly applies a security-
+  // deposit multiple to car park, utility, etc. that have no clause at all.
+  const aliasPattern = new RegExp(`(?:${label})`, 'i');
+  const aliasPresent = aliasPattern.test(rawText);
   const patterns = [
     // A multiple sitting immediately beside the deposit label, in either order.
     new RegExp(`(?:${label})[\\s\\S]{0,60}?${monthMultiplePattern}`, 'i'),
     new RegExp(`${monthMultiplePattern}[\\s\\S]{0,60}?(?:${label})`, 'i'),
-    // "<multiple> month(s) [of] [the] [monthly] rental/rent" phrasing.
-    new RegExp(`${monthMultiplePattern}(?:'s|')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)\\b`, 'i')
+    // "<multiple> month(s) [of] [the] [monthly] rental/rent" phrasing — only used when the deposit
+    // label appears somewhere in the document to avoid cross-contamination between deposit types.
+    ...(aliasPresent ? [new RegExp(`${monthMultiplePattern}(?:'s|')?\\s*(?:of\\s*)?(?:the\\s*)?(?:monthly\\s*)?(?:rental|rent)\\b`, 'i')] : [])
   ];
   let match: RegExpMatchArray | null = null;
   for (const pattern of patterns) {

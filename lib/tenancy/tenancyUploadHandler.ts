@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createHash, randomUUID } from 'node:crypto';
 import { extractTenancyFile } from '../ai/tenancyExtractor';
+import { enrichExtractedTenancyTerms, type TenancyLegalIntelligence } from '../ai/extractTenancy';
 import { getOpenAiConfiguration } from '../ai/openAiConfig';
 import { logExtractionDiagnostic, logExtractionFailure } from '../ai/extractionDiagnostics';
 import { validateFileSignature, workspaceStoragePath } from '../documents/upload';
@@ -87,8 +88,14 @@ function storedExtractionForReview(
   extraction: ExistingExtraction,
   document: ExistingDocument
 ): Awaited<ReturnType<typeof extractTenancyFile>> {
-  const legalIntelligence = reusableLegalIntelligence(extraction.extracted_json);
-  if (!legalIntelligence) throw new Error('stored-extraction-invalid');
+  const storedLegal = reusableLegalIntelligence(extraction.extracted_json);
+  if (!storedLegal) throw new Error('stored-extraction-invalid');
+
+  const rawText = extraction.raw_text ?? '';
+  // Re-apply enrichment so stale DB values from before the normalization fixes are corrected.
+  const legalIntelligence = rawText
+    ? enrichExtractedTenancyTerms(storedLegal as unknown as TenancyLegalIntelligence, rawText)
+    : storedLegal;
 
   const provider = extraction.extraction_engine === 'openai' ? 'openai' : 'deterministic';
 
@@ -96,7 +103,7 @@ function storedExtractionForReview(
     provider,
     fallbackUsed: provider !== 'openai',
     fallbackReason: provider === 'openai' ? null : 'stored_extraction',
-    rawText: extraction.raw_text ?? '',
+    rawText,
     summary: extraction.ai_summary ?? '',
     legalIntelligence,
     document: {
