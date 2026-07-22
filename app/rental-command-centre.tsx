@@ -692,7 +692,7 @@ export default function RentalCommandCentre() {
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
-    setNotice((current) => ({ ...current, message: translateKnownMessage(current.message, language) }));
+    setNotice((current) => current ? ({ ...current, message: translateKnownMessage(current.message, language) }) : current);
     setPaymentError((current) => translateKnownMessage(current, language));
     setFieldErrors((current) => (Object.keys(current).length ? validateForm(form, tenancies, editingTenancyId, language) : current));
     setImportErrors((current) => (reviewForm && Object.keys(current).length ? validateForm(reviewForm, tenancies, null, language) : current));
@@ -1228,7 +1228,7 @@ export default function RentalCommandCentre() {
         <Metric label={t.latePartial} value={String(lateCount)} tone={lateCount > 0 ? 'danger' : 'success'} />
       </section>
 
-      <div className={`notice ${notice.tone}`} role="status">{notice.message}</div>
+      {notice && <div className={`notice ${notice.tone}`} role="status">{notice.message}</div>}
 
       {isLoading ? (
         <LoadingState title={t.loadingRentalData} body={t.notices.connecting} />
