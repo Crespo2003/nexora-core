@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import NotificationBell from './components/NotificationBell';
+import AppNav from './components/AppNav';
 import type { Confidence, TenancyExtraction } from '../lib/ai/tenancyExtractor';
 import type { DepositEvidence } from '../lib/ai/extractTenancy';
 import {
@@ -1215,21 +1215,10 @@ export default function RentalCommandCentre() {
           <h1>{t.rentalCommandCentre}</h1>
           <p className="header-copy">{t.headerCopy}</p>
         </div>
-        <div className="header-actions">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <LanguageToggle language={language} onChange={setLanguage} />
-            <NotificationBell />
-          </div>
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button" href="/dashboard">{language === 'zh' ? '仪表板' : 'Dashboard'}</a>
-            <a className="ghost-button active" href="/">{t.rentalCommandCentre}</a>
-            <a className="ghost-button" href="/documents">{getDocumentTranslations(language).navDocuments}</a>
-            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-            <a className="ghost-button" href="/settings">{language === 'zh' ? '设置' : 'Settings'}</a>
-          </nav>
+        <AppNav activePage="tenancies">
+          <LanguageToggle language={language} onChange={setLanguage} />
           <div className="live-badge" title={t.connectionStatus}>{isSupabaseUnavailable ? t.notices.dbConnect : t.supabaseLive}</div>
-        </div>
+        </AppNav>
       </header>
 
       <section className="metrics-grid" aria-label={t.dashboard}>

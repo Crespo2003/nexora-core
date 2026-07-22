@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireWorkspaceAccess } from '../../../lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   const auth = await requireWorkspaceAccess();
   if (auth instanceof Response) return auth;
@@ -15,13 +17,25 @@ export async function GET(request: Request) {
 
   const pattern = `%${q}%`;
 
-  const [tenancyResult, documentResult, commercialResult] = await Promise.allSettled([
+  const [tenantsResult, landlordsResult, propertiesResult, documentResult, commercialResult] = await Promise.allSettled([
     supabase
       .from('tenancies')
       .select('id, tenant, landlord, property, unit_no, status')
       .eq('workspace_id', workspaceId)
-      .or(`tenant.ilike.${pattern},landlord.ilike.${pattern},property.ilike.${pattern},unit_no.ilike.${pattern}`)
-      .limit(8),
+      .ilike('tenant', pattern)
+      .limit(6),
+    supabase
+      .from('tenancies')
+      .select('id, tenant, landlord, property, unit_no, status')
+      .eq('workspace_id', workspaceId)
+      .ilike('landlord', pattern)
+      .limit(6),
+    supabase
+      .from('tenancies')
+      .select('id, tenant, landlord, property, unit_no, status')
+      .eq('workspace_id', workspaceId)
+      .or(`property.ilike.${pattern},unit_no.ilike.${pattern}`)
+      .limit(6),
     supabase
       .from('documents')
       .select('id, original_filename, document_type, processing_status')
@@ -38,15 +52,45 @@ export async function GET(request: Request) {
 
   const groups = [];
 
-  const tenancies = tenancyResult.status === 'fulfilled' ? (tenancyResult.value.data ?? []) : [];
-  if (tenancies.length) {
+  const tenants = tenantsResult.status === 'fulfilled' ? (tenantsResult.value.data ?? []) : [];
+  if (tenants.length) {
     groups.push({
-      type: 'tenancies',
-      label: 'Tenancies',
-      items: tenancies.map((t) => ({
+      type: 'tenants',
+      label: 'Tenants',
+      items: tenants.map((t) => ({
         id: t.id,
         title: t.tenant,
-        subtitle: `${t.property}${t.unit_no ? ' · ' + t.unit_no : ''} · ${t.landlord}`,
+        subtitle: `${t.property}${t.unit_no ? ' · ' + t.unit_no : ''}`,
+        status: t.status,
+        href: '/',
+      })),
+    });
+  }
+
+  const landlords = landlordsResult.status === 'fulfilled' ? (landlordsResult.value.data ?? []) : [];
+  if (landlords.length) {
+    groups.push({
+      type: 'landlords',
+      label: 'Landlords',
+      items: landlords.map((t) => ({
+        id: `landlord-${t.id}`,
+        title: t.landlord,
+        subtitle: `${t.property}${t.unit_no ? ' · ' + t.unit_no : ''} · ${t.tenant}`,
+        status: t.status,
+        href: '/',
+      })),
+    });
+  }
+
+  const properties = propertiesResult.status === 'fulfilled' ? (propertiesResult.value.data ?? []) : [];
+  if (properties.length) {
+    groups.push({
+      type: 'properties',
+      label: 'Properties',
+      items: properties.map((t) => ({
+        id: `property-${t.id}`,
+        title: t.property,
+        subtitle: `${t.unit_no ? t.unit_no + ' · ' : ''}${t.tenant}`,
         status: t.status,
         href: '/',
       })),

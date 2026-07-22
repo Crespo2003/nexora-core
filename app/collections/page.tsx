@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import NotificationBell from '../components/NotificationBell';
+import AppNav from '../components/AppNav';
 import { formatDisplayDate, formatDisplayMonth, renderLandlordUpdate, renderTenantReminder } from '../../lib/collections/core';
 import type { CollectionOverview, CollectionOverviewRow } from '../../lib/collections/live';
 import type { Language } from '../../lib/collections/types';
@@ -407,23 +407,12 @@ export default function CollectionsPage() {
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
-        <div className="header-actions">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div className="language-toggle">
-              <button className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
-              <button className={language === 'zh' ? 'active' : ''} onClick={() => setLanguage('zh')}>中文</button>
-            </div>
-            <NotificationBell />
+        <AppNav activePage="collections">
+          <div className="language-toggle">
+            <button className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
+            <button className={language === 'zh' ? 'active' : ''} onClick={() => setLanguage('zh')}>中文</button>
           </div>
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button" href="/dashboard">{language === 'zh' ? '仪表板' : 'Dashboard'}</a>
-            <a className="ghost-button" href="/">{t.navRental}</a>
-            <a className="ghost-button" href="/documents">{t.navDocuments}</a>
-            <a className="ghost-button active" href="/collections">{t.title}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-            <a className="ghost-button" href="/settings">{language === 'zh' ? '设置' : 'Settings'}</a>
-          </nav>
-        </div>
+        </AppNav>
       </header>
 
       {notice && <div className={`notice ${notice.tone}`}>{notice.message}</div>}

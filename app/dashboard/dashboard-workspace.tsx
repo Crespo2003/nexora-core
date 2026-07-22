@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { formatMYR } from '../../lib/formatters';
+import AppNav from '../components/AppNav';
 
-type Metric = {
+type Metrics = {
   activeTenancies: number;
   monthlyDue: number;
   monthlyPaid: number;
@@ -20,13 +21,15 @@ type Lead = { id: string; title: string; status: string; requirement_type: strin
 type Followup = { id: string; title: string; next_follow_up: string; status: string };
 
 type DashboardData = {
-  metrics: Metric;
+  metrics: Metrics;
   expiringIn30: ExpiringItem[];
   topProperties: TopProperty[];
   recentActivities: Activity[];
   leads: Lead[];
   upcomingFollowups: Followup[];
 };
+
+type DashboardPayload = Partial<DashboardData> & { success: boolean };
 
 function kpiClass(type: string) {
   if (type === 'danger') return 'metric danger';
@@ -71,14 +74,14 @@ export default function DashboardWorkspace() {
   useEffect(() => {
     fetch('/api/dashboard')
       .then((r) => r.json())
-      .then((payload: { success: boolean; metrics?: Metric } & Partial<DashboardData>) => {
+      .then((payload: DashboardPayload) => {
         if (payload.success && payload.metrics) {
           setData(payload as DashboardData);
         } else {
-          setError('Could not load dashboard data.');
+          setError('Dashboard data could not be loaded. Please refresh.');
         }
       })
-      .catch(() => setError('Could not load dashboard data.'))
+      .catch(() => setError('Dashboard data could not be loaded. Please refresh.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -86,34 +89,25 @@ export default function DashboardWorkspace() {
     <main className="command-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">Nexora · Sprint 004</p>
+          <p className="eyebrow">NEXORA · Sprint 004</p>
           <h1>Dashboard</h1>
-          <p className="header-copy">Live overview of your property portfolio and operations.</p>
+          <p className="header-copy">Live overview of your property portfolio, collections, and commercial pipeline.</p>
         </div>
-        <div className="header-actions">
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button active" href="/dashboard">Dashboard</a>
-            <a className="ghost-button" href="/">Rental Command Centre</a>
-            <a className="ghost-button" href="/documents">Documents</a>
-            <a className="ghost-button" href="/collections">Collections</a>
-            <a className="ghost-button" href="/commercial">Commercial CRM</a>
-            <a className="ghost-button" href="/settings">Settings</a>
-          </nav>
-        </div>
+        <AppNav activePage="dashboard" />
       </header>
 
       {error && <div className="notice error" role="alert">{error}</div>}
 
       {loading ? (
         <div className="dash-skeleton">
-          {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card" />)}
+          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton-card" />)}
         </div>
       ) : data ? (
         <>
-          <section className="metrics-grid dash-metrics" aria-label="Key metrics">
+          <section className="metrics-grid dash-metrics" aria-label="Portfolio metrics">
             <KpiCard label="Active Tenancies" value={String(data.metrics.activeTenancies)} />
             <KpiCard label="Monthly Due" value={formatMYR(data.metrics.monthlyDue)} />
-            <KpiCard label="Monthly Collected" value={formatMYR(data.metrics.monthlyPaid)} type={data.metrics.collectionPct >= 80 ? 'success' : 'danger'} />
+            <KpiCard label="Collected" value={formatMYR(data.metrics.monthlyPaid)} type={data.metrics.collectionPct >= 80 ? 'success' : 'danger'} />
             <KpiCard label="Collection Rate" value={`${data.metrics.collectionPct}%`} type={data.metrics.collectionPct >= 80 ? 'success' : 'danger'} />
             <KpiCard label="Outstanding" value={formatMYR(data.metrics.outstandingTotal)} type={data.metrics.outstandingTotal > 0 ? 'danger' : 'success'} />
             <KpiCard label="Expiring in 30 Days" value={String(data.metrics.expiringIn30Count)} type={data.metrics.expiringIn30Count > 0 ? 'danger' : 'success'} />
@@ -122,7 +116,7 @@ export default function DashboardWorkspace() {
           <div className="dash-body">
             <div className="dash-col">
               <section className="panel dash-section">
-                <h2 className="dash-section-title">Top Properties</h2>
+                <h3 className="dash-section-title">Top Properties</h3>
                 {data.topProperties.length === 0 ? (
                   <p className="dash-empty">No active tenancies yet.</p>
                 ) : (
@@ -130,7 +124,7 @@ export default function DashboardWorkspace() {
                     {data.topProperties.map((p) => (
                       <li key={p.name} className="dash-list-row">
                         <span className="dash-list-name">{p.name}</span>
-                        <span className="dash-list-badge">{p.count} unit{p.count > 1 ? 's' : ''}</span>
+                        <span className="dash-list-badge">{p.count} unit{p.count !== 1 ? 's' : ''}</span>
                       </li>
                     ))}
                   </ul>
@@ -138,7 +132,7 @@ export default function DashboardWorkspace() {
               </section>
 
               <section className="panel dash-section">
-                <h2 className="dash-section-title">Expiring Soon</h2>
+                <h3 className="dash-section-title">Expiring Soon</h3>
                 {data.expiringIn30.length === 0 ? (
                   <p className="dash-empty">No tenancies expiring in the next 30 days.</p>
                 ) : (
@@ -149,7 +143,7 @@ export default function DashboardWorkspace() {
                           <span className="dash-list-name">{t.tenant}</span>
                           <span className="dash-list-sub">{t.property}{t.unit_no ? ' · ' + t.unit_no : ''}</span>
                         </div>
-                        <span className="dash-expiry-pill" data-urgent={daysUntil(t.expiry_date) <= 14}>
+                        <span className="dash-expiry-pill" data-urgent={daysUntil(t.expiry_date) <= 14 ? 'true' : 'false'}>
                           {daysUntil(t.expiry_date)}d
                         </span>
                       </li>
@@ -161,9 +155,9 @@ export default function DashboardWorkspace() {
 
             <div className="dash-col">
               <section className="panel dash-section">
-                <h2 className="dash-section-title">Recent Activity</h2>
+                <h3 className="dash-section-title">Recent Activity</h3>
                 {data.recentActivities.length === 0 ? (
-                  <p className="dash-empty">No recent activity.</p>
+                  <p className="dash-empty">No activity recorded yet.</p>
                 ) : (
                   <ul className="dash-activity-list">
                     {data.recentActivities.map((a) => (
@@ -182,7 +176,7 @@ export default function DashboardWorkspace() {
 
             <div className="dash-col">
               <section className="panel dash-section">
-                <h2 className="dash-section-title">Active Leads</h2>
+                <h3 className="dash-section-title">Active Leads</h3>
                 {data.leads.length === 0 ? (
                   <p className="dash-empty">No open commercial leads.</p>
                 ) : (
@@ -201,9 +195,9 @@ export default function DashboardWorkspace() {
               </section>
 
               <section className="panel dash-section">
-                <h2 className="dash-section-title">Upcoming Follow-ups</h2>
+                <h3 className="dash-section-title">Upcoming Follow-ups</h3>
                 {data.upcomingFollowups.length === 0 ? (
-                  <p className="dash-empty">No follow-ups in the next 30 days.</p>
+                  <p className="dash-empty">No follow-ups scheduled in the next 30 days.</p>
                 ) : (
                   <ul className="dash-list">
                     {data.upcomingFollowups.map((f) => (

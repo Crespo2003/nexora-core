@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import NotificationBell from '../components/NotificationBell';
+import AppNav from '../components/AppNav';
 import type { TenancyExtraction } from '../../lib/ai/tenancyExtractor';
 import { DateInput } from '../../lib/dates/DateInput';
 import { displayDateToIso, formatExtractedNexoraDate, isoToDisplayDate } from '../../lib/dates/formatDate';
@@ -574,20 +574,9 @@ export default function DocumentsPage() {
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
-        <div className="header-actions">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <LanguageToggle language={language} onChange={setLanguage} />
-            <NotificationBell />
-          </div>
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button" href="/dashboard">{language === 'zh' ? '仪表板' : 'Dashboard'}</a>
-            <a className="ghost-button" href="/">{t.navRental}</a>
-            <a className="ghost-button active" href="/documents">{t.navDocuments}</a>
-            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-            <a className="ghost-button" href="/settings">{language === 'zh' ? '设置' : 'Settings'}</a>
-          </nav>
-        </div>
+        <AppNav activePage="documents">
+          <LanguageToggle language={language} onChange={setLanguage} />
+        </AppNav>
       </header>
 
       {notice && <div className={`notice ${notice.tone}`}>{notice.message}</div>}

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireWorkspaceAccess } from '../../../lib/supabase/server';
 import { currentIsoDate, currentIsoMonth } from '../../../lib/dates/formatDate';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   const auth = await requireWorkspaceAccess();
   if (auth instanceof Response) return auth;
