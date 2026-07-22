@@ -691,6 +691,7 @@ export default function RentalCommandCentre() {
 
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
+    window.dispatchEvent(new CustomEvent('nexora-language-change', { detail: language }));
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
     setNotice((current) => current ? ({ ...current, message: translateKnownMessage(current.message, language) }) : current);
     setPaymentError((current) => translateKnownMessage(current, language));

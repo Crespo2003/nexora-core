@@ -174,6 +174,7 @@ export default function CollectionsPage() {
 
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
+    window.dispatchEvent(new CustomEvent('nexora-language-change', { detail: language }));
   }, [language]);
 
   useEffect(() => {
