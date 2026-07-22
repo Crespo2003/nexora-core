@@ -8,6 +8,7 @@ import { allowedDocumentMimeTypes, maxDocumentUploadBytes } from '../../../../li
 import { checkUploadRateLimit } from '../../../../lib/security/uploadRateLimit';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
+import { writeActivity } from '../../../../lib/activity/log';
 
 const storageBucket = 'real-estate-documents';
 
@@ -158,6 +159,8 @@ export async function POST(request: Request) {
       message: { en: textResult.status === 'not_configured' ? 'Document saved, but OCR is not configured.' : 'Document saved, but extraction failed. You can retry.', zh: textResult.status === 'not_configured' ? '文件已保存，但尚未配置 OCR。' : '文件已保存，但提取失败。您可以重试。' },
       technicalReference: textResult.error || 'document-extraction-failed', document: documentInsert.data, extraction: extractionInsert.data, retryAllowed: true
     }, { status: 422 });
+
+    void writeActivity(supabase, workspaceId, 'document', docResult.data.id, 'document_uploaded', { filename: file.name, document_type: documentType }, user.id);
 
     return NextResponse.json({
       success: true, failedStage: null, affectedRecordIds: [documentInsert.data.id, extractionInsert.data.id], rollbackStatus: 'not-required',

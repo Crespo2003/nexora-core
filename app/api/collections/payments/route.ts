@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { normalizeDateForStorage } from '../../../../lib/dates/formatDate';
+import { writeActivity } from '../../../../lib/activity/log';
 
 const methods = ['bank_transfer', 'cash', 'duitnow', 'touch_n_go', 'cheque', 'online_banking', 'other'];
 const transactionTypes = ['payment', 'advance_payment', 'adjustment', 'waiver', 'refund', 'reversal'];
@@ -57,6 +58,8 @@ export async function POST(request: Request) {
       credit: number;
       status: string;
     };
+
+    void writeActivity(supabase, workspaceId, 'collection', payload.rentalCollectionId, 'payment_recorded', { amount: payload.amount, method: payload.paymentMethod }, user.id);
 
     return NextResponse.json({
       success: true,

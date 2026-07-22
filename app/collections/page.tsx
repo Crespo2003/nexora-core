@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import NotificationBell from '../components/NotificationBell';
 import { formatDisplayDate, formatDisplayMonth, renderLandlordUpdate, renderTenantReminder } from '../../lib/collections/core';
 import type { CollectionOverview, CollectionOverviewRow } from '../../lib/collections/live';
 import type { Language } from '../../lib/collections/types';
@@ -402,20 +403,25 @@ export default function CollectionsPage() {
     <main className="command-shell collections-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">NEXORA / Sprint 003</p>
+          <p className="eyebrow">NEXORA / Sprint 004</p>
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
         <div className="header-actions">
-          <div className="language-toggle">
-            <button className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
-            <button className={language === 'zh' ? 'active' : ''} onClick={() => setLanguage('zh')}>中文</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="language-toggle">
+              <button className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
+              <button className={language === 'zh' ? 'active' : ''} onClick={() => setLanguage('zh')}>中文</button>
+            </div>
+            <NotificationBell />
           </div>
           <nav className="top-nav" aria-label="Primary">
+            <a className="ghost-button" href="/dashboard">{language === 'zh' ? '仪表板' : 'Dashboard'}</a>
             <a className="ghost-button" href="/">{t.navRental}</a>
             <a className="ghost-button" href="/documents">{t.navDocuments}</a>
             <a className="ghost-button active" href="/collections">{t.title}</a>
             <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
+            <a className="ghost-button" href="/settings">{language === 'zh' ? '设置' : 'Settings'}</a>
           </nav>
         </div>
       </header>

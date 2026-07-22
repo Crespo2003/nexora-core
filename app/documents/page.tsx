@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import NotificationBell from '../components/NotificationBell';
 import type { TenancyExtraction } from '../../lib/ai/tenancyExtractor';
 import { DateInput } from '../../lib/dates/DateInput';
 import { displayDateToIso, formatExtractedNexoraDate, isoToDisplayDate } from '../../lib/dates/formatDate';
@@ -569,17 +570,22 @@ export default function DocumentsPage() {
     <main className="command-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">NEXORA / Sprint 003</p>
+          <p className="eyebrow">NEXORA / Sprint 004</p>
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
         <div className="header-actions">
-          <LanguageToggle language={language} onChange={setLanguage} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <LanguageToggle language={language} onChange={setLanguage} />
+            <NotificationBell />
+          </div>
           <nav className="top-nav" aria-label="Primary">
+            <a className="ghost-button" href="/dashboard">{language === 'zh' ? '仪表板' : 'Dashboard'}</a>
             <a className="ghost-button" href="/">{t.navRental}</a>
             <a className="ghost-button active" href="/documents">{t.navDocuments}</a>
             <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
             <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
+            <a className="ghost-button" href="/settings">{language === 'zh' ? '设置' : 'Settings'}</a>
           </nav>
         </div>
       </header>

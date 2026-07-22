@@ -7,7 +7,7 @@ export const translations = {
   en: {
     appTitle: 'NEXORA',
     platformSubtitle: 'AI Real Estate Operating System',
-    sprint: 'Sprint 001',
+    sprint: 'Sprint 004',
     headerCopy: 'Malaysia-first rental operations, TA memory, Supabase persistence, and reviewed AI tenancy import.',
     chineseShort: '中文',
     rentalCommandCentre: 'Rental Command Centre',
@@ -199,7 +199,7 @@ export const translations = {
   zh: {
     appTitle: 'NEXORA',
     platformSubtitle: 'AI 房地产运营系统',
-    sprint: 'Sprint 001',
+    sprint: 'Sprint 004',
     headerCopy: '马来西亚优先的租赁运营、TA 记忆、Supabase 持久化，以及需人工确认的 AI 租约导入。',
     chineseShort: '中文',
     rentalCommandCentre: '租金管理中心',
