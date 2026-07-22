@@ -35,8 +35,8 @@ export function extractTenancyDeterministically(
   };
 
   const property = {
-    propertyName: first([/property(?: name)?\s*[:\-]\s*([^\n]+)/i, /premises\s*[:\-]\s*([^\n]+)/i]),
-    unitNo: first([/unit(?: no\.?| number)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /parcel(?: no\.?)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i]),
+    propertyName: first([/property(?: name)?\s*[:\-]\s*([^\n]+)/i, /premises\s*[:\-]\s*([^\n]+)/i, /\bunit\s+[A-Za-z0-9][A-Za-z0-9\-\/]*\s*,\s*([^,\n]+)/i]),
+    unitNo: first([/unit(?: no\.?| number)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /parcel(?: no\.?)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /\bunit\s+([A-Z0-9][A-Z0-9\-\/]{1,})/i]),
     fullAddress: first([/(?:address|premises address)\s*[:\-]\s*([^\n]+(?:\n[^\n]+){0,2})/i]),
     propertyType: first([/(residential|commercial|industrial|office|retail|bungalow|embassy|factory|warehouse|shoplot|condominium|apartment)/i], 'low')
   };
@@ -50,8 +50,8 @@ export function extractTenancyDeterministically(
     carParkRemoteDeposit: money([/(?:car park|parking)(?: remote| card)? deposit\s*[:\-]?\s*(RM\s*[\d,]+(?:\.\d{2})?)/i])
   };
   const dates = {
-    commencementDate: date([/(?:commencement date|start date)\s*[:\-]\s*([^\n]+)/i]),
-    expiryDate: date([/(?:expiry date|end date)\s*[:\-]\s*([^\n]+)/i]),
+    commencementDate: date([/(?:commencement date|start date)\s*[:\-]\s*([^\n]+)/i, /commenc(?:ing|ement)\s+(?:on\s+)?(?:the\s+)?(\d[^\n,]{1,25})/i]),
+    expiryDate: date([/(?:expiry date|end date)\s*[:\-]\s*([^\n]+)/i, /expir(?:ing|y)\s+on\s+(?:the\s+)?(\d[^\n,]{1,25})/i]),
     rentalDueDay: first([/(?:rental due day|rent due day)\s*[:\-]?\s*(\d{1,2})/i, /rent(?:al)?\s+(?:is\s+)?payable\s+on\s+the\s+(\d{1,2})(?:st|nd|rd|th)?/i]),
     renewalOption: first([/(renewal option\s*[:\-]\s*[^\n]+)/i, /(option to renew\s*[^\n]+)/i]),
     noticePeriod: first([/(notice period\s*[:\-]\s*[^\n]+)/i, /(\d+\s*(?:month|months|day|days)\s+notice)/i]),
@@ -97,8 +97,9 @@ function partyFields(
   label: string,
   first: (patterns: RegExp[], confidence?: Confidence, accept?: (value: string) => boolean) => ExtractedField
 ) {
+  const reversePattern = new RegExp(`([A-Z]{2,}(?:[ \\t]+[A-Z]{2,}){0,3})[^\\n]{0,200}?hereinafter\\s+called\\s+["']?(?:the\\s+)?(?:${label})`, 'i');
   return {
-    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i')], 'medium', isSafePartyName),
+    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i'), reversePattern], 'medium', isSafePartyName),
     idNo: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:ic|nric|passport|company no\\.?)\\s*[:\\-]\\s*([A-Z0-9\\-]+)`, 'i')]),
     phone: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:phone|tel|contact)\\s*[:\\-]\\s*([+0-9 \\-]+)`, 'i')]),
     email: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:email|e-mail)\\s*[:\\-]\\s*([^\\s\\n]+@[^\\s\\n]+)`, 'i')])
@@ -121,6 +122,12 @@ function normalizeDateField(field: ExtractedField): ExtractedField {
   if (iso) return { value: isoToDisplayDate(iso[1]), confidence: field.confidence };
   const slash = value.match(/(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
   if (slash) return { value: `${slash[1].padStart(2, '0')}/${slash[2].padStart(2, '0')}/${slash[3]}`, confidence: field.confidence };
+  const named = value.match(/(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})/i);
+  if (named) {
+    const monthMap: Record<string, string> = { january: '01', february: '02', march: '03', april: '04', may: '05', june: '06', july: '07', august: '08', september: '09', october: '10', november: '11', december: '12' };
+    const month = monthMap[named[2].toLowerCase()];
+    if (month) return { value: `${named[1].padStart(2, '0')}/${month}/${named[3]}`, confidence: field.confidence };
+  }
   return { value, confidence: 'low' };
 }
 

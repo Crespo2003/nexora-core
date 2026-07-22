@@ -9,6 +9,7 @@ import {
 } from '../ai/extractTenancy';
 import { extractTenancyDeterministically } from './deterministicParser';
 import { getOpenAiConfiguration } from '../ai/openAiConfig';
+import { logExtractionDiagnostic } from '../ai/extractionDiagnostics';
 
 export type Confidence = 'high' | 'medium' | 'low';
 
@@ -135,11 +136,33 @@ export async function extractTenancyFile(
     return toLegacyExtraction({ ...result, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
   } catch (error) {
     const reason = extractionErrorCode(error);
+    if (reason === 'openai_timeout' && options.compactTimeoutMs && options.compactTimeoutMs > 0) {
+      logExtractionDiagnostic('compact_retry_started', { requestId: options.requestId, fallbackReason: reason });
+      const compactText = buildCompactExtractionText(text.text);
+      try {
+        const compactResult = await extractTenancyText(compactText, input.filename, {
+          ...options,
+          timeoutMs: options.compactTimeoutMs,
+          retryTimeoutMs: undefined,
+          maxAttempts: 1
+        });
+        return toLegacyExtraction({ ...compactResult, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
+      } catch {
+        logExtractionDiagnostic('compact_retry_failed', { requestId: options.requestId, fallbackReason: 'openai_timeout' });
+      }
+    }
     const fallback = extractTenancyDeterministically(text.text, input.filename, input.mimeType, reason, aiConfigured && reason !== 'openai_not_configured');
     fallback.document.usedOcr = text.usedOcr;
     fallback.document.pageCount = text.pageCount;
     return fallback;
   }
+}
+
+function buildCompactExtractionText(rawText: string): string {
+  const HEAD = 20_000;
+  const TAIL = 5_000;
+  if (rawText.length <= HEAD + TAIL) return rawText;
+  return `${rawText.slice(0, HEAD)}\n\n[...]\n\n${rawText.slice(-TAIL)}`;
 }
 
 function toLegacyExtraction(

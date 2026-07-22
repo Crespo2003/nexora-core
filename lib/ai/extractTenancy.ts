@@ -204,6 +204,8 @@ type ExtractTenancyOptions = {
   timeoutMs?: number;
   /** Timeout applied only to the single allowed retry attempt of each OpenAI call. */
   retryTimeoutMs?: number;
+  /** Timeout for a compact single-chunk retry when the primary AI attempt times out. */
+  compactTimeoutMs?: number;
   maxAttempts?: number;
   requestId?: string;
   /** Invoked once per actual OpenAI HTTP call, for call-count observability. */

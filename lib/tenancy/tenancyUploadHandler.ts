@@ -15,16 +15,18 @@ const retryableDocumentStatuses = ['ocr_required', 'extraction_failed'];
 
 /**
  * Explicit stage budgets so the route always answers well before the 300-second Vercel
- * function ceiling. The primary OpenAI request gets at most 90s and its single
- * transient-failure retry at most 60s; whatever wall-clock time earlier stages consumed
- * is subtracted so the total application budget never exceeds 240s.
+ * function ceiling. The primary OpenAI request gets at most 60s and its single
+ * transient-failure retry at most 40s; on timeout a compact-text retry gets at most 45s.
+ * Whatever wall-clock time earlier stages consumed is subtracted so the total application
+ * budget never exceeds 240s.
  */
 const uploadTimeBudget = Object.freeze({
   totalMs: 240_000,
   fileRetrievalMs: 20_000,
   textExtractionMs: 90_000,
-  aiPrimaryMs: 90_000,
-  aiRetryMs: 60_000,
+  aiPrimaryMs: 60_000,
+  aiRetryMs: 40_000,
+  aiCompactMs: 45_000,
   persistenceReserveMs: 20_000
 });
 
@@ -571,6 +573,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
         const remainingForAi = uploadTimeBudget.totalMs - elapsedBeforeExtraction - uploadTimeBudget.persistenceReserveMs;
         const aiPrimaryTimeoutMs = Math.max(10_000, Math.min(uploadTimeBudget.aiPrimaryMs, remainingForAi));
         const aiRetryTimeoutMs = Math.max(5_000, Math.min(uploadTimeBudget.aiRetryMs, remainingForAi - aiPrimaryTimeoutMs));
+        const aiCompactTimeoutMs = Math.max(5_000, Math.min(uploadTimeBudget.aiCompactMs, remainingForAi - aiPrimaryTimeoutMs - aiRetryTimeoutMs));
         logExtractionDiagnostic('text_extraction_started', { requestId, stage, fileSize, elapsedMs: elapsedBeforeExtraction });
         extraction = await dependencies.extractTenancyFile({ buffer, filename: fileName, mimeType }, {
           // Smallest safe output budget for the consolidated single-call schema: strict
@@ -582,6 +585,7 @@ export function createTenancyUploadHandler(overrides: Partial<UploadDependencies
           maxOutputTokens: 16_000,
           timeoutMs: aiPrimaryTimeoutMs,
           retryTimeoutMs: aiRetryTimeoutMs,
+          compactTimeoutMs: aiCompactTimeoutMs,
           maxAttempts: 2,
           requestId,
           onAiCallStart: () => { aiCallCount += 1; }
