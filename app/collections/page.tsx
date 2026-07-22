@@ -211,6 +211,12 @@ export default function CollectionsPage() {
     }));
   }, [selectedRow, reminderLanguage, todayIso]);
 
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   async function loadOverview() {
     setLoading(true);
     setNotice(null);

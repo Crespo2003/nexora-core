@@ -290,6 +290,8 @@ export default function DocumentsPage() {
   const [selectedId, setSelectedId] = useState('');
   const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm());
   const [operationId, setOperationId] = useState('');
+  const [sortBy, setSortBy] = useState<'filename' | 'type' | 'date' | 'status'>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [filters, setFilters] = useState<Filters>({
     query: '',
     documentType: 'all',
@@ -354,6 +356,12 @@ export default function DocumentsPage() {
     }
   }, [selectedDocument?.id]);
 
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   const metrics = useMemo(() => {
     return {
       total: documents.length,
@@ -390,6 +398,32 @@ export default function DocumentsPage() {
       return true;
     });
   }, [documents, filters, language]);
+
+  const sortedDocuments = useMemo(() => {
+    return [...filteredDocuments].sort((a, b) => {
+      let aVal = '';
+      let bVal = '';
+      if (sortBy === 'filename') { aVal = a.originalFilename; bVal = b.originalFilename; }
+      else if (sortBy === 'type') { aVal = a.documentType; bVal = b.documentType; }
+      else if (sortBy === 'date') { aVal = a.uploadedAt; bVal = b.uploadedAt; }
+      else { aVal = a.processingStatus; bVal = b.processingStatus; }
+      return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+  }, [filteredDocuments, sortBy, sortDir]);
+
+  function handleSort(col: typeof sortBy) {
+    if (sortBy === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(col);
+      setSortDir('asc');
+    }
+  }
+
+  function sortIndicator(col: typeof sortBy) {
+    if (sortBy !== col) return ' ↕';
+    return sortDir === 'asc' ? ' ↑' : ' ↓';
+  }
 
   function addFiles(files: FileList | File[]) {
     const nextItems = Array.from(files).map((file): QueueItem => {
@@ -535,7 +569,7 @@ export default function DocumentsPage() {
     <main className="command-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">NEXORA / Sprint 002</p>
+          <p className="eyebrow">NEXORA / Sprint 003</p>
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
@@ -644,10 +678,18 @@ export default function DocumentsPage() {
           <EmptyState title={t.noDocuments} body={t.noDocumentsBody} />
         ) : (
           <div className="document-table">
-            {filteredDocuments.map((document) => {
+            <div className="document-row document-row-header">
+              <button className="doc-sort-btn" onClick={() => handleSort('filename')}>{t.filename}{sortIndicator('filename')}</button>
+              <button className="doc-sort-btn" onClick={() => handleSort('type')}>{t.documentType}{sortIndicator('type')}</button>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)' }}>{language === 'zh' ? '租客' : 'Tenant'}</span>
+              <button className="doc-sort-btn" onClick={() => handleSort('date')}>{t.uploadDate}{sortIndicator('date')}</button>
+              <button className="doc-sort-btn" onClick={() => handleSort('status')}>{t.extractionStatus}{sortIndicator('status')}</button>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)' }}>{language === 'zh' ? '操作' : 'Actions'}</span>
+            </div>
+            {sortedDocuments.map((document) => {
               const extraction = document.extraction?.extractedJson as TenancyExtraction | undefined;
               return (
-                <button className={`document-row ${selectedDocument?.id === document.id ? 'is-active' : ''}`} key={document.id} onClick={() => setSelectedId(document.id)}>
+                <div className={`document-row ${selectedDocument?.id === document.id ? 'is-active' : ''}`} key={document.id} onClick={() => setSelectedId(document.id)}>
                   <span>
                     <strong>{document.originalFilename}</strong>
                     <small>{documentTypeLabel(document.documentType, language)}</small>
@@ -656,7 +698,12 @@ export default function DocumentsPage() {
                   <span>{fieldValue(extraction, 'tenant.name') || t.notDetected}</span>
                   <span>{isoToDisplayDate(document.uploadedAt.slice(0, 10))}</span>
                   <span className={`status-pill ${document.processingStatus === 'extraction_failed' || document.processingStatus === 'ocr_required' ? 'overdue' : 'paid'}`}>{statusLabel(document.processingStatus, language)}</span>
-                </button>
+                  <div className="doc-row-actions" onClick={(e) => e.stopPropagation()}>
+                    <button className="action-chip" onClick={() => openSignedUrl(document.id, 'inline')} disabled={operationId === `inline-${document.id}`}>{language === 'zh' ? '预览' : 'View'}</button>
+                    <button className="action-chip action-chip--pay" onClick={() => openSignedUrl(document.id, 'attachment')} disabled={operationId === `dl-${document.id}`}>{language === 'zh' ? '下载' : 'DL'}</button>
+                    <button className="action-chip" style={{ borderColor: 'rgba(251,113,133,0.3)', background: 'rgba(251,113,133,0.08)', color: '#fecdd3' }} onClick={() => deleteDocument(document.id)} disabled={operationId === `delete-${document.id}`}>{language === 'zh' ? '删除' : 'Del'}</button>
+                  </div>
+                </div>
               );
             })}
           </div>

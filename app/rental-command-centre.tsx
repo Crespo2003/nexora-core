@@ -702,6 +702,12 @@ export default function RentalCommandCentre() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   async function loadRentalData() {
     if (!supabase) return;
     setIsLoading(true);
