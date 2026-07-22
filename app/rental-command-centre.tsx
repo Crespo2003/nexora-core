@@ -653,6 +653,8 @@ export default function RentalCommandCentre() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | null>(null);
   const [documentViewStatus, setDocumentViewStatus] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [tenancyPage, setTenancyPage] = useState(0);
   const userEditedFields = useRef<Set<EditableTenancyFormField>>(new Set());
 
   const selectedTenancy = tenancies.find((tenancy) => tenancy.id === selectedTenancyId) ?? tenancies[0] ?? null;
@@ -665,6 +667,19 @@ export default function RentalCommandCentre() {
   const lateCount = collections.filter((collection) => collection.paymentStatus === 'overdue' || collection.paymentStatus === 'partial').length;
   const depositExposure = tenancies.reduce((sum, tenancy) => sum + tenancy.securityDeposit + tenancy.utilityDeposit + tenancy.accessCardDeposit + tenancy.carParkRemoteDeposit, 0);
   const existingTenancyKeys: ExistingTenancyKey[] = tenancies.map((tenancy) => ({ tenant: tenancy.tenant, property: tenancy.property, unitNo: tenancy.unitNo }));
+  const filteredTenancies = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return tenancies;
+    return tenancies.filter((tenancy) =>
+      tenancy.tenant.toLowerCase().includes(q) ||
+      tenancy.property.toLowerCase().includes(q) ||
+      tenancy.unitNo.toLowerCase().includes(q) ||
+      tenancy.landlord.toLowerCase().includes(q)
+    );
+  }, [tenancies, searchTerm]);
+  const tenancyPageCount = Math.max(1, Math.ceil(filteredTenancies.length / 10));
+  const safeTenancyPage = Math.min(tenancyPage, tenancyPageCount - 1);
+  const pagedTenancies = filteredTenancies.slice(safeTenancyPage * 10, safeTenancyPage * 10 + 10);
   const canImportReviewed = reviewForm ? canConfirmReviewedImport(reviewForm, existingTenancyKeys) : false;
   const importCompleted = importState === 'success' && Boolean(importedTenancyId);
 
@@ -760,7 +775,11 @@ export default function RentalCommandCentre() {
     const errors = validateForm(form, tenancies, editingTenancyId, language);
     if (Object.keys(errors).length) {
       setFieldErrors(errors);
-      setNotice({ tone: 'error', message: Object.values(errors)[0] ?? t.errors.unknown });
+      const errorMessages = Object.values(errors).filter(Boolean) as string[];
+      const message = errorMessages.length > 1
+        ? `${errorMessages.length} ${language === 'zh' ? '个验证错误。' : 'validation errors. '}${errorMessages[0]}`
+        : (errorMessages[0] ?? t.errors.unknown);
+      setNotice({ tone: 'error', message });
       return;
     }
 
@@ -1337,32 +1356,67 @@ export default function RentalCommandCentre() {
               {tenancies.length === 0 ? (
                 <EmptyState title={t.noTenanciesYet} body={t.noTenanciesBody} />
               ) : (
-                <div className="tenancy-list">
-                  {tenancies.map((tenancy) => (
-                    <article className={`tenancy-card ${selectedTenancy?.id === tenancy.id ? 'is-active' : ''}`} key={tenancy.id} onClick={() => setSelectedTenancyId(tenancy.id)}>
-                      <div>
-                        <h3>{tenancy.property} {tenancy.unitNo && `· ${tenancy.unitNo}`}</h3>
-                        <p>{tenancy.tenant} / {tenancy.landlord}</p>
-                        <p>{t.commencementDate}: {isoToDisplayDate(tenancy.commencementDate)} · {t.expiryDate}: {isoToDisplayDate(tenancy.expiryDate)}</p>
-                      </div>
-                      <strong>{currency.format(tenancy.monthlyRental)}</strong>
-                      {pendingDeleteId === tenancy.id ? (
-                        <div className="delete-confirmation">
-                          <p>{t.deleteWarning}</p>
-                          <div className="card-actions danger-actions">
-                            <button onClick={(event) => { event.stopPropagation(); confirmDeleteTenancy(tenancy.id); }}>{operationId === `delete-${tenancy.id}` ? t.deleting : t.confirm}</button>
-                            <button onClick={(event) => { event.stopPropagation(); setPendingDeleteId(null); }}>{t.cancel}</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="card-actions">
-                          <button title={t.edit} onClick={(event) => { event.stopPropagation(); startEdit(tenancy); }}>{t.edit}</button>
-                          <button title={t.deleteTenancy} onClick={(event) => { event.stopPropagation(); setPendingDeleteId(tenancy.id); }}>{t.delete}</button>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
+                <>
+                  <input
+                    type="search"
+                    value={searchTerm}
+                    placeholder={language === 'zh' ? '搜索租约、租客、房产...' : 'Search by tenant, property, unit, landlord...'}
+                    onChange={(e) => { setSearchTerm(e.target.value); setTenancyPage(0); }}
+                    style={{ marginBottom: 12 }}
+                  />
+                  {filteredTenancies.length === 0 && searchTerm.trim() ? (
+                    <EmptyState title={language === 'zh' ? '没有匹配结果' : 'No matches'} body={language === 'zh' ? '请调整搜索关键词。' : 'Adjust your search term and try again.'} />
+                  ) : (
+                    <div className="tenancy-list">
+                      {pagedTenancies.map((tenancy) => {
+                        const expiry = normalizeDateForStorage(tenancy.expiryDate);
+                        const daysToExpiry = expiry ? Math.ceil((new Date(`${expiry}T00:00:00Z`).getTime() - new Date(`${todayIso}T00:00:00Z`).getTime()) / 86400000) : null;
+                        return (
+                          <article className={`tenancy-card ${selectedTenancy?.id === tenancy.id ? 'is-active' : ''}`} key={tenancy.id} onClick={() => setSelectedTenancyId(tenancy.id)}>
+                            <div>
+                              <h3>
+                                {tenancy.property} {tenancy.unitNo && `· ${tenancy.unitNo}`}
+                                {daysToExpiry !== null && daysToExpiry < 0 && (
+                                  <span className="status-pill overdue" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? '已过期' : 'Expired'}</span>
+                                )}
+                                {daysToExpiry !== null && daysToExpiry >= 0 && daysToExpiry <= 30 && (
+                                  <span className="status-pill overdue" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? `${daysToExpiry}天` : `Exp ${daysToExpiry}d`}</span>
+                                )}
+                                {daysToExpiry !== null && daysToExpiry > 30 && daysToExpiry <= 90 && (
+                                  <span className="status-pill partial" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? `${daysToExpiry}天` : `Exp ${daysToExpiry}d`}</span>
+                                )}
+                              </h3>
+                              <p>{tenancy.tenant} / {tenancy.landlord}</p>
+                              <p>{t.commencementDate}: {isoToDisplayDate(tenancy.commencementDate)} · {t.expiryDate}: {isoToDisplayDate(tenancy.expiryDate)}</p>
+                            </div>
+                            <strong>{currency.format(tenancy.monthlyRental)}</strong>
+                            {pendingDeleteId === tenancy.id ? (
+                              <div className="delete-confirmation">
+                                <p>{t.deleteWarning}</p>
+                                <div className="card-actions danger-actions">
+                                  <button onClick={(event) => { event.stopPropagation(); confirmDeleteTenancy(tenancy.id); }}>{operationId === `delete-${tenancy.id}` ? t.deleting : t.confirm}</button>
+                                  <button onClick={(event) => { event.stopPropagation(); setPendingDeleteId(null); }}>{t.cancel}</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="card-actions">
+                                <button title={t.edit} onClick={(event) => { event.stopPropagation(); startEdit(tenancy); }}>{t.edit}</button>
+                                <button title={t.deleteTenancy} onClick={(event) => { event.stopPropagation(); setPendingDeleteId(tenancy.id); }}>{t.delete}</button>
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {tenancyPageCount > 1 && (
+                    <div className="tenancy-pagination">
+                      <button className="ghost-button" style={{ marginTop: 0, minWidth: 36 }} onClick={() => setTenancyPage((p) => Math.max(0, p - 1))} disabled={safeTenancyPage === 0}>&#8592;</button>
+                      <span style={{ color: 'var(--muted)', fontSize: 13 }}>{safeTenancyPage + 1} / {tenancyPageCount}</span>
+                      <button className="ghost-button" style={{ marginTop: 0, minWidth: 36 }} onClick={() => setTenancyPage((p) => Math.min(tenancyPageCount - 1, p + 1))} disabled={safeTenancyPage === tenancyPageCount - 1}>&#8594;</button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

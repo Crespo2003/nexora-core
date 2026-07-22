@@ -228,6 +228,13 @@ export default function CollectionsPage() {
     }
   }
 
+  const upcomingDue7Days = useMemo(() => {
+    const target = new Date(`${todayIso}T00:00:00Z`);
+    target.setUTCDate(target.getUTCDate() + 7);
+    const targetIso = target.toISOString().slice(0, 10);
+    return rows.filter((r) => r.collection.dueDate >= todayIso && r.collection.dueDate <= targetIso && r.outstanding > 0).length;
+  }, [rows, todayIso]);
+
   const filteredRows = useMemo(() => {
     const query = filters.search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -441,12 +448,21 @@ export default function CollectionsPage() {
           ) : (
             <>
               {activeView === 'dashboard' && (
-                <section className="workspace-grid bottom-grid">
-                  <div className="panel">
-                    <div className="section-title"><div><p className="eyebrow">{t.title}</p><h2>{formatDisplayMonth(filters.month)}</h2></div></div>
-                    <CollectionList rows={filteredRows} language={language} selectedId={selectedRow?.collection.id ?? ''} onSelect={setSelectedCollectionId} emptyText={t.noResults} />
+                <section className="panel bottom-grid">
+                  <div className="section-title">
+                    <div>
+                      <p className="eyebrow">{t.title}</p>
+                      <h2>{formatDisplayMonth(filters.month)} &mdash; {filteredRows.length} {language === 'zh' ? '条记录' : 'records'}</h2>
+                    </div>
                   </div>
-                  {selectedRow && <DetailPanel row={selectedRow} language={language} />}
+                  <CollectionTable
+                    rows={filteredRows}
+                    language={language}
+                    selectedId={selectedRow?.collection.id ?? ''}
+                    onSelect={setSelectedCollectionId}
+                    onAction={(id, action) => { setSelectedCollectionId(id); setActiveView(action); }}
+                    emptyText={t.noResults}
+                  />
                 </section>
               )}
 
@@ -476,6 +492,7 @@ export default function CollectionsPage() {
         <Metric label={t.collected} value={formatMYR(metrics.collectedThisMonth)} tone="success" />
         <Metric label={t.outstanding} value={formatMYR(metrics.outstandingThisMonth)} tone={metrics.outstandingThisMonth ? 'danger' : 'success'} />
         <Metric label={t.overdueAmount} value={formatMYR(metrics.overdueAmount)} tone={metrics.overdueAmount ? 'danger' : undefined} />
+        <Metric label={language === 'zh' ? '7天内到期' : 'Due in 7 Days'} value={String(upcomingDue7Days)} tone={upcomingDue7Days ? 'danger' : undefined} />
         <Metric label={t.dueToday} value={String(metrics.dueToday)} />
         <Metric label={t.dueSoon} value={String(metrics.dueWithin3Days)} />
         <Metric label={t.overdueTenancies} value={String(metrics.overdueTenancies)} tone={metrics.overdueTenancies ? 'danger' : undefined} />
@@ -708,6 +725,88 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 
 function Memory({ label, value }: { label: string; value: string }) {
   return <div className="memory-item"><span>{label}</span><p>{value || '-'}</p></div>;
+}
+
+type CollectionTableAction = 'payment' | 'reminder' | 'detail';
+
+function CollectionTable({ rows, language, selectedId, onSelect, onAction, emptyText }: {
+  rows: CollectionOverviewRow[];
+  language: UiLanguage;
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onAction: (id: string, action: CollectionTableAction) => void;
+  emptyText: string;
+}) {
+  if (rows.length === 0) return <EmptyState title={emptyText} body={language === 'zh' ? '调整筛选条件后重试。' : 'Adjust filters and try again.'} />;
+  const zh = language === 'zh';
+  return (
+    <div className="collection-table-wrap">
+      <table className="collection-data-table">
+        <thead>
+          <tr>
+            <th>{zh ? '租客' : 'Tenant'}</th>
+            <th>{zh ? '房产' : 'Property'}</th>
+            <th>{zh ? '单位' : 'Unit'}</th>
+            <th>{zh ? '月租' : 'Monthly Rental'}</th>
+            <th>TNB</th>
+            <th>{zh ? '水费' : 'Water'}</th>
+            <th>IWK</th>
+            <th>WiFi</th>
+            <th>{zh ? '空调' : 'Air Con'}</th>
+            <th>{zh ? '其他' : 'Other'}</th>
+            <th>{zh ? '应收' : 'Total Due'}</th>
+            <th>{zh ? '已付' : 'Amount Paid'}</th>
+            <th>{zh ? '未结' : 'Outstanding'}</th>
+            <th>{zh ? '到期日' : 'Due Date'}</th>
+            <th>{zh ? '付款日' : 'Paid Date'}</th>
+            <th>{zh ? '付款方式' : 'Method'}</th>
+            <th>{zh ? '收据号' : 'Receipt No'}</th>
+            <th>{zh ? '备注' : 'Remarks'}</th>
+            <th>{zh ? '状态' : 'Status'}</th>
+            <th>{zh ? '操作' : 'Actions'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const { collection, tenancy } = row;
+            const lastPayment = [...collection.paymentLedger].sort((a, b) => (a.paymentDate > b.paymentDate ? -1 : 1)).at(0);
+            const waPhone = tenancy.tenantPhone.replace(/[^0-9+]/g, '');
+            const isActive = selectedId === collection.id;
+            return (
+              <tr key={collection.id} className={isActive ? 'is-active' : ''} onClick={() => onSelect(collection.id)}>
+                <td>{tenancy.tenant || '-'}</td>
+                <td>{tenancy.property || '-'}</td>
+                <td>{tenancy.unitNo || '-'}</td>
+                <td className="cdt-num">{formatMYR(tenancy.monthlyRental)}</td>
+                <td className="cdt-num">{collection.tnbAmount ? formatMYR(collection.tnbAmount) : '-'}</td>
+                <td className="cdt-num">{collection.waterAmount ? formatMYR(collection.waterAmount) : '-'}</td>
+                <td className="cdt-num">{collection.iwkAmount ? formatMYR(collection.iwkAmount) : '-'}</td>
+                <td className="cdt-num">{collection.wifiAmount ? formatMYR(collection.wifiAmount) : '-'}</td>
+                <td className="cdt-num">{collection.aircondAmount ? formatMYR(collection.aircondAmount) : '-'}</td>
+                <td className="cdt-num">{collection.otherCharges ? formatMYR(collection.otherCharges) : '-'}</td>
+                <td className="cdt-num cdt-bold">{formatMYR(row.total)}</td>
+                <td className="cdt-num cdt-success">{formatMYR(row.paid)}</td>
+                <td className={`cdt-num ${row.outstanding > 0 ? 'cdt-danger' : 'cdt-success'}`}>{formatMYR(row.outstanding)}</td>
+                <td>{formatDisplayDate(collection.dueDate)}</td>
+                <td>{lastPayment?.paymentDate ? formatDisplayDate(lastPayment.paymentDate) : '-'}</td>
+                <td>{lastPayment?.paymentMethod ? lastPayment.paymentMethod.replace('_', ' ') : '-'}</td>
+                <td>{lastPayment?.receiptNumber || '-'}</td>
+                <td style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{collection.notes || '-'}</td>
+                <td><span className={`status-pill ${row.status}`}>{row.status}</span></td>
+                <td className="cdt-actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="action-chip" onClick={() => onAction(collection.id, 'detail')}>{zh ? '查看' : 'View'}</button>
+                  <button className="action-chip action-chip--pay" onClick={() => onAction(collection.id, 'payment')}>{zh ? '付款' : 'Pay'}</button>
+                  {waPhone && (
+                    <a className="action-chip action-chip--wa" href={`https://wa.me/${waPhone}`} target="_blank" rel="noreferrer">WA</a>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
