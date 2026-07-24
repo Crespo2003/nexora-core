@@ -1,4 +1,5 @@
 import type { CollectionRecord, TimelineEvent } from './types';
+import { formatMYR } from '../formatters';
 
 export function calculateDaysRemaining(expiryDate: string, today = new Date()) {
   const expiry = new Date(`${expiryDate}T00:00:00Z`);
@@ -8,12 +9,7 @@ export function calculateDaysRemaining(expiryDate: string, today = new Date()) {
 }
 
 export function formatWorkspaceMoney(value: number | string | null | undefined) {
-  const amount = Number(value ?? 0);
-  return new Intl.NumberFormat('en-MY', {
-    style: 'currency',
-    currency: 'MYR',
-    minimumFractionDigits: 2
-  }).format(Number.isFinite(amount) ? amount : 0);
+  return formatMYR(value);
 }
 
 export function confidencePercent(confidence: unknown) {

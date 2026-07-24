@@ -74,10 +74,10 @@ test('4. utility deposits normalize to numeric values', () => {
   assert.equal(mapTenancyExtractionToForm(aiResponse()).generalUtilityDeposit, 1750);
 });
 
-test('5. tenancy dates convert to the HTML date input format', () => {
+test('5. tenancy dates convert to Nexora DD/MM/YYYY form values', () => {
   const mapped = mapTenancyExtractionToForm(aiResponse());
-  assert.equal(mapped.commencementDate, '2026-07-01');
-  assert.equal(mapped.expiryDate, '2028-06-30');
+  assert.equal(mapped.commencementDate, '01/07/2026');
+  assert.equal(mapped.expiryDate, '30/06/2028');
   assert.equal(normalizeDateForInput('31/02/2026'), '');
 });
 
@@ -107,7 +107,7 @@ test('8. tenant and landlord names populate from their nested fields', () => {
   const mapped = mapTenancyExtractionToForm(aiResponse());
   assert.equal(mapped.tenantName, 'Aisha Rahman');
   assert.equal(mapped.landlordName, 'Lim Wei');
-  assert.equal(mapped.tenantPhone, '+60123456789');
+  assert.equal(mapped.tenantPhone, '+60 12-345 6789');
 });
 
 test('9. property address populates from the nested property object', () => {

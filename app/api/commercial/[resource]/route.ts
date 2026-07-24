@@ -3,6 +3,7 @@ import { maskContact } from '../../../../lib/commercial/confidentiality';
 import { validateDealStageTransition } from '../../../../lib/commercial/deals';
 import { allowedCommercialChanges, commercialResource, commercialResources } from '../../../../lib/commercial/resources';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { displayDateTimeToIso, normalizeDateForStorage } from '../../../../lib/dates/formatDate';
 
 export async function GET(request: Request, { params }: { params: { resource: string } }) {
   try {
@@ -65,7 +66,7 @@ async function mutate(request: Request, { params }: { params: { resource: string
       if (!deleted.data) return responseError(404, 'record', 'record-not-found');
       return NextResponse.json({ success: true, affectedRecordIds: [id], rollbackStatus: 'not-required' });
     }
-    let changes = allowedCommercialChanges(resource, payload);
+    let changes = normalizeCommercialDates(allowedCommercialChanges(resource, payload));
     if (auth.role === 'finance' && resource === 'deals') {
       const financeFields = new Set(['deal_value', 'expected_commission', 'commission_share', 'probability', 'notes']);
       changes = Object.fromEntries(Object.entries(changes).filter(([key]) => financeFields.has(key)));
@@ -94,6 +95,21 @@ function protectRow(resource: string, row: Record<string, unknown>, role: string
   if (resource !== 'listings' || privileged || row.confidentiality_level === 'normal') return row;
   const highly = row.confidentiality_level === 'highly_confidential';
   return { ...row, property_name: highly ? '' : row.property_name, address: row.concealed_address || row.area || row.city || '', landlord_name: '', landlord_contact: '', photo_paths: [], document_paths: [], notes: '', latitude: null, longitude: null };
+}
+
+function normalizeCommercialDates(changes: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(changes).flatMap(([key, value]) => {
+    if (value === null || value === '') return [[key, null]];
+    if (key === 'due_at' || key === 'completed_at' || key.endsWith('_at')) {
+      const timestamp = displayDateTimeToIso(value);
+      return timestamp ? [[key, timestamp]] : [];
+    }
+    if (key.includes('date') || key.endsWith('_expiry') || key === 'next_follow_up' || key === 'commencement_target') {
+      const date = normalizeDateForStorage(value);
+      return date ? [[key, date]] : [];
+    }
+    return [[key, value]];
+  }));
 }
 
 function escapeSearch(value: string) { return value.replace(/[,%()]/g, ' '); }

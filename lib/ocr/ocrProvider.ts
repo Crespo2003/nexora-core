@@ -4,6 +4,13 @@ export type OcrResult = {
   error: string;
 };
 
+export type OcrRequestContext = {
+  requestId?: string;
+  pageNumber?: number;
+  pageCount?: number;
+};
+
 export interface OcrProvider {
-  extractText(input: { buffer: Buffer; mimeType: string; filename: string }): Promise<OcrResult>;
+  readonly providerName?: string;
+  extractText(input: { buffer: Buffer; mimeType: string; filename: string }, context?: OcrRequestContext): Promise<OcrResult>;
 }

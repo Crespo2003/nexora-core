@@ -1,13 +1,15 @@
-import { isoToDisplayDate } from '../dates/formatDate';
+import { currentIsoDate, isoToDisplayDate } from '../dates/formatDate';
 import { extractDocumentText } from '../documents/extractText';
 import {
   extractTenancyText,
+  TenancyExtractionError,
   type TenancyDocumentInput,
   type TenancyLegalIntelligence,
   type TenancyProcessingResult
 } from '../ai/extractTenancy';
 import { extractTenancyDeterministically } from './deterministicParser';
 import { getOpenAiConfiguration } from '../ai/openAiConfig';
+import { logExtractionDiagnostic } from '../ai/extractionDiagnostics';
 
 export type Confidence = 'high' | 'medium' | 'low';
 
@@ -89,6 +91,7 @@ export type TenancyExtraction = {
     usedOcr: boolean;
     pageCount: number | null;
     chunkCount: number;
+    aiCallCount?: number;
     model: string | null;
     fallbackReason: TenancyExtractionFallbackReason | null;
   };
@@ -123,9 +126,9 @@ export async function extractTenancyFile(
   input: TenancyDocumentInput,
   options: ParserOptions = {}
 ): Promise<TenancyExtraction> {
-  const text = await extractDocumentText(input, options.ocrProvider);
+  const text = await extractDocumentText(input, options.ocrProvider, { requestId: options.requestId });
   if (text.status !== 'completed' || !text.text.trim()) {
-    throw new Error(text.usedOcr || /ocr/i.test(text.error) ? 'ocr_failed' : 'text_extraction_failed');
+    throw new TenancyExtractionError(text.error || (text.usedOcr ? 'ocr_failed' : 'text_extraction_failed'));
   }
   const aiConfigured = Boolean(options.apiKey?.trim()) || getOpenAiConfiguration().configured;
   try {
@@ -133,11 +136,33 @@ export async function extractTenancyFile(
     return toLegacyExtraction({ ...result, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
   } catch (error) {
     const reason = extractionErrorCode(error);
+    if (reason === 'openai_timeout' && options.compactTimeoutMs && options.compactTimeoutMs > 0) {
+      logExtractionDiagnostic('compact_retry_started', { requestId: options.requestId, fallbackReason: reason });
+      const compactText = buildCompactExtractionText(text.text);
+      try {
+        const compactResult = await extractTenancyText(compactText, input.filename, {
+          ...options,
+          timeoutMs: options.compactTimeoutMs,
+          retryTimeoutMs: undefined,
+          maxAttempts: 1
+        });
+        return toLegacyExtraction({ ...compactResult, pageCount: text.pageCount, usedOcr: text.usedOcr }, input.filename, input.mimeType);
+      } catch {
+        logExtractionDiagnostic('compact_retry_failed', { requestId: options.requestId, fallbackReason: 'openai_timeout' });
+      }
+    }
     const fallback = extractTenancyDeterministically(text.text, input.filename, input.mimeType, reason, aiConfigured && reason !== 'openai_not_configured');
     fallback.document.usedOcr = text.usedOcr;
     fallback.document.pageCount = text.pageCount;
     return fallback;
   }
+}
+
+function buildCompactExtractionText(rawText: string): string {
+  const HEAD = 20_000;
+  const TAIL = 5_000;
+  if (rawText.length <= HEAD + TAIL) return rawText;
+  return `${rawText.slice(0, HEAD)}\n\n[...]\n\n${rawText.slice(-TAIL)}`;
 }
 
 function toLegacyExtraction(
@@ -147,7 +172,7 @@ function toLegacyExtraction(
 ): TenancyExtraction {
   const legal = result.extraction;
   const confidence = confidenceLevel(legal.confidence);
-  const field = (value: string | number, path: string, missingConfidence: Confidence = 'low'): ExtractedField => ({
+  const field = (value: string | number | null | undefined, path: string, missingConfidence: Confidence = 'low'): ExtractedField => ({
     value: String(value ?? ''),
     confidence: String(value ?? '').trim() ? confidenceLevel((legal.field_confidence[path] ?? legal.confidence * 100) / 100) : missingConfidence
   });
@@ -201,13 +226,14 @@ function toLegacyExtraction(
     },
     document: {
       originalFilename,
-      uploadDate: isoToDisplayDate(new Date().toISOString().slice(0, 10)),
+      uploadDate: isoToDisplayDate(currentIsoDate()),
       documentType: legal.document_type || documentTypeFor(mimeType),
       extractionStatus: result.rawText.length >= 80 ? 'ready' : 'unreadable',
       extractionConfidence: confidence,
       usedOcr: result.usedOcr,
       pageCount: result.pageCount,
       chunkCount: result.chunkCount,
+      aiCallCount: result.aiCallCount,
       model: result.model,
       fallbackReason: null
     },

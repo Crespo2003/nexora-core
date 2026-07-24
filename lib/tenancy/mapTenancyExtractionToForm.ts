@@ -1,4 +1,6 @@
 import type { TenancyLegalIntelligence } from '../ai/extractTenancy';
+import { formatExtractedNexoraDate, normalizeDateForStorage } from '../dates/formatDate';
+import { normalizePhone } from '../contacts/phone';
 import type { TenancyExtraction } from './parser';
 
 export type MappedMoney = number | '';
@@ -87,6 +89,7 @@ export function mapTenancyExtractionToForm(
   const legal = record(root.legalIntelligence ?? root.extraction ?? root);
   const fieldConfidence = numericRecord(read(legal, 'field_confidence'));
   const sourceReferences = record(read(legal, 'field_evidence'));
+  const depositDetails = record(read(legal, 'deposit_details'));
   const monthlyRental = normalizeExtractedMoney(
     read(legal, 'financial.monthly_rental') ?? read(root, 'financial.monthlyRental'),
     '',
@@ -97,6 +100,11 @@ export function mapTenancyExtractionToForm(
   const summary = text(root.summary);
   const risks = array(read(legal, 'risks'));
   const warnings = array(read(legal, 'warnings')).map(text).filter(Boolean);
+  const witnessContacts = array(read(legal, 'contacts')).flatMap((contact) => {
+    const candidate = record(contact);
+    return text(candidate.role).toLowerCase() === 'witness' ? [text(candidate.name) || text(candidate.company)] : [];
+  }).filter(Boolean).join(', ');
+  const structuredInventory = array(read(legal, 'inventory.items')).map(text).filter(Boolean).join('\n');
   const notes = [
     summary,
     risks.length ? `Risks:\n- ${risks.map(riskSummary).filter(Boolean).join('\n- ')}` : '',
@@ -106,13 +114,13 @@ export function mapTenancyExtractionToForm(
   const mapped: TenancyMappedForm = {
     tenantName: value(read(legal, 'tenant.name') ?? read(root, 'tenant.name')),
     tenantCompany: value(read(legal, 'tenant.company')),
-    tenantIdentification: value(read(legal, 'tenant.ic_passport') ?? read(root, 'tenant.idNo')),
-    tenantPhone: normalizeMalaysianPhone(value(read(legal, 'tenant.phone') ?? read(root, 'tenant.phone'))),
+    tenantIdentification: formatMalaysianIdentification(value(read(legal, 'tenant.ic_passport') ?? read(root, 'tenant.idNo'))),
+    tenantPhone: normalizeMalaysianPhone(value(read(legal, 'tenant.mobile')) || value(read(legal, 'tenant.phone') ?? read(root, 'tenant.phone'))),
     tenantEmail: value(read(legal, 'tenant.email') ?? read(root, 'tenant.email')).toLowerCase(),
     landlordName: value(read(legal, 'landlord.name') ?? read(root, 'landlord.name')),
     landlordCompany: value(read(legal, 'landlord.company')),
-    landlordIdentification: value(read(legal, 'landlord.ic_passport') ?? read(root, 'landlord.idNo')),
-    landlordPhone: normalizeMalaysianPhone(value(read(legal, 'landlord.phone') ?? read(root, 'landlord.phone'))),
+    landlordIdentification: formatMalaysianIdentification(value(read(legal, 'landlord.ic_passport') ?? read(root, 'landlord.idNo'))),
+    landlordPhone: normalizeMalaysianPhone(value(read(legal, 'landlord.mobile')) || value(read(legal, 'landlord.phone') ?? read(root, 'landlord.phone'))),
     landlordEmail: value(read(legal, 'landlord.email') ?? read(root, 'landlord.email')).toLowerCase(),
     propertyName: value(read(legal, 'property.name') ?? read(root, 'property.propertyName')),
     unitNumber: value(read(legal, 'property.unit') ?? read(root, 'property.unitNo')),
@@ -120,12 +128,12 @@ export function mapTenancyExtractionToForm(
     propertyType: value(read(legal, 'property.type') ?? read(root, 'property.propertyType')),
     buildUp: value(read(legal, 'property.build_up')),
     landArea: value(read(legal, 'property.land_area')),
-    carParks: value(read(legal, 'property.car_parks')),
+    carParks: value(read(legal, 'property.car_parks')) || value(read(legal, 'parking.bays')),
     monthlyRental,
-    securityDeposit: normalizeExtractedMoney(read(legal, 'financial.security_deposit') ?? read(root, 'financial.securityDeposit'), monthlyRental, 'financial.security_deposit', fieldConfidence, sourceReferences),
-    generalUtilityDeposit: normalizeExtractedMoney(read(legal, 'financial.utility_deposit') ?? read(root, 'financial.utilityDeposit'), monthlyRental, 'financial.utility_deposit', fieldConfidence, sourceReferences),
-    accessCardDeposit: normalizeExtractedMoney(read(legal, 'financial.access_card_deposit') ?? read(root, 'financial.accessCardDeposit'), monthlyRental, 'financial.access_card_deposit', fieldConfidence, sourceReferences),
-    carParkRemoteDeposit: normalizeExtractedMoney(read(legal, 'financial.car_park_deposit') ?? read(root, 'financial.carParkRemoteDeposit'), monthlyRental, 'financial.car_park_deposit', fieldConfidence, sourceReferences),
+    securityDeposit: normalizeExtractedMoney(read(legal, 'financial.security_deposit') ?? read(root, 'financial.securityDeposit'), monthlyRental, 'financial.security_deposit', fieldConfidence, sourceReferences, record(depositDetails.security_deposit)),
+    generalUtilityDeposit: normalizeExtractedMoney(read(legal, 'financial.utility_deposit') ?? read(root, 'financial.utilityDeposit'), monthlyRental, 'financial.utility_deposit', fieldConfidence, sourceReferences, record(depositDetails.utility_deposit)),
+    accessCardDeposit: normalizeExtractedMoney(read(legal, 'financial.access_card_deposit') ?? read(root, 'financial.accessCardDeposit'), monthlyRental, 'financial.access_card_deposit', fieldConfidence, sourceReferences, record(depositDetails.access_card_deposit)),
+    carParkRemoteDeposit: normalizeExtractedMoney(read(legal, 'financial.car_park_deposit') ?? read(root, 'financial.carParkRemoteDeposit'), monthlyRental, 'financial.car_park_deposit', fieldConfidence, sourceReferences, record(depositDetails.car_park_deposit)),
     stampDuty: normalizeExtractedMoney(read(legal, 'financial.stamp_duty'), monthlyRental, 'financial.stamp_duty', fieldConfidence, sourceReferences),
     commencementDate: normalizeDateForInput(value(read(legal, 'tenancy.commencement_date') ?? read(root, 'dates.commencementDate'))),
     expiryDate: normalizeDateForInput(value(read(legal, 'tenancy.expiry_date') ?? read(root, 'dates.expiryDate'))),
@@ -137,9 +145,9 @@ export function mapTenancyExtractionToForm(
     iwkResponsibility: value(read(legal, 'utilities.iwk')),
     wifiResponsibility: value(read(legal, 'utilities.wifi')),
     specialClauses: array(read(legal, 'special_clauses')).map(text).filter(Boolean).join('\n\n'),
-    witnesses: value(read(legal, 'legal.witnesses')),
-    inventory: value(read(legal, 'legal.inventory')),
-    latePayment: value(read(legal, 'legal.late_payment')),
+    witnesses: value(read(legal, 'legal.witnesses')) || witnessContacts,
+    inventory: value(read(legal, 'legal.inventory')) || structuredInventory || value(read(legal, 'inventory.furnished')),
+    latePayment: value(read(legal, 'legal.late_payment')) || value(read(legal, 'payment.late_payment_interest')),
     termination: value(read(legal, 'legal.termination')),
     viewingRights: value(read(legal, 'legal.viewing_rights')),
     maintenance: value(read(legal, 'legal.maintenance')),
@@ -184,8 +192,17 @@ export function mergeMappedFormPreservingEdits(
 export function normalizeMoney(input: unknown, monthlyRental: MappedMoney = ''): MappedMoney {
   const raw = value(input);
   if (!raw) return '';
-  const months = raw.match(/(\d+(?:\.\d+)?)\s*(?:months?|months?'?\s+rent|个月|個月)/i);
-  if (months && monthlyRental !== '') return roundMoney(Number(months[1]) * monthlyRental);
+  // A rental multiple ("2 months' rental") or a plain month count ("3 months") must never be read as a
+  // currency amount. Only convert when it clearly states a rental multiple and the monthly rental is known;
+  // otherwise leave it blank so "3 months" can never become RM 3.
+  if (/months?\b|个月|個月/i.test(raw)) {
+    const rentalMultiple = raw.match(/(\d+(?:\.\d+)?|half)\s*(?:\(\s*\d+(?:\.\d+)?\s*\))?\s*(?:months?|个月|個月)(?:'s|')?\s*(?:of\s*)?(?:the\s*)?(?:monthly\s*)?(?:rental|rent|租金)/i);
+    if (rentalMultiple && monthlyRental !== '') {
+      const months = rentalMultiple[1].toLowerCase() === 'half' ? 0.5 : Number(rentalMultiple[1]);
+      return Number.isFinite(months) && months > 0 ? roundMoney(months * monthlyRental) : '';
+    }
+    return '';
+  }
   const parsed = Number(raw.replace(/\bMYR\b|RM/gi, '').replace(/[,\s]/g, '').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(parsed) && parsed >= 0 ? roundMoney(parsed) : '';
 }
@@ -195,37 +212,33 @@ function normalizeExtractedMoney(
   monthlyRental: MappedMoney,
   path: string,
   fieldConfidence: Record<string, number>,
-  sourceReferences: Record<string, unknown>
+  sourceReferences: Record<string, unknown>,
+  depositDetail: Record<string, unknown> = {}
 ): MappedMoney {
   const raw = value(input);
   const evidence = record(sourceReferences[path]);
   const evidenceValue = value(evidence.value);
   const confidence = Number(evidence.confidence ?? fieldConfidence[path] ?? 0);
-  if (/^0(?:\.0+)?$/.test(raw) && !evidenceValue && (!Number.isFinite(confidence) || confidence <= 0)) return '';
+  const explicitZero = text(depositDetail.basis) === 'explicit_amount' && /^0(?:\.0+)?$/.test(value(depositDetail.amount));
+  const evidencedZero = /^0(?:\.0+)?$/.test(evidenceValue) && Boolean(text(evidence.source_excerpt));
+  if (/^0(?:\.0+)?$/.test(raw) && !explicitZero && !evidencedZero) return '';
+  if (/^0(?:\.0+)?$/.test(raw) && !evidenceValue && (!Number.isFinite(confidence) || confidence <= 0) && !explicitZero) return '';
   return normalizeMoney(input, monthlyRental);
 }
 
 export function normalizeDateForInput(input: string): string {
-  const raw = input.trim();
-  if (!raw) return '';
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return validDate(iso[1], iso[2], iso[3]) ? raw : '';
-  const numeric = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-  if (numeric) return validDate(numeric[3], numeric[2], numeric[1])
-    ? `${numeric[3]}-${numeric[2].padStart(2, '0')}-${numeric[1].padStart(2, '0')}` : '';
-  const named = raw.toLowerCase().match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\s+(\d{4})$/);
-  const month = named ? months[named[2]] : undefined;
-  return named && month && validDate(named[3], month, named[1])
-    ? `${named[3]}-${month}-${named[1].padStart(2, '0')}` : '';
+  return formatExtractedNexoraDate(input);
 }
 
 export function normalizeMalaysianPhone(input: string): string {
-  if (!input.trim()) return '';
-  const normalized = input.replace(/[^0-9+]/g, '').replace(/(?!^)\+/g, '');
-  if (/^\+60\d{8,10}$/.test(normalized)) return normalized;
-  if (/^60\d{8,10}$/.test(normalized)) return `+${normalized}`;
-  if (/^0\d{8,10}$/.test(normalized)) return `+60${normalized.slice(1)}`;
-  return normalized;
+  const normalized = normalizePhone(input);
+  return normalized.display || normalized.normalized || input.trim();
+}
+
+export function formatMalaysianIdentification(input: string): string {
+  const compact = input.replace(/\s+/g, '');
+  const digits = compact.replace(/\D/g, '');
+  return /^\d{12}$/.test(digits) ? `${digits.slice(0, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}` : input.trim();
 }
 
 function value(input: unknown): string {
@@ -316,14 +329,3 @@ function formFieldForExtractionPath(path: string): keyof TenancyMappedForm | und
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
-
-function validDate(year: string, month: string, day: string): boolean {
-  const date = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.getUTCFullYear() === Number(year)
-    && date.getUTCMonth() + 1 === Number(month) && date.getUTCDate() === Number(day);
-}
-
-const months: Record<string, string> = {
-  january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
-  july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
-};

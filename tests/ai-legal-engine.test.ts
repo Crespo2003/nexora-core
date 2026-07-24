@@ -37,8 +37,9 @@ const evaluationCases = Array.from({ length: 20 }, (_, index) => {
 
 test('strict output schema contains exactly the required top-level keys', () => {
   assert.deepEqual(Object.keys(tenancyLegalIntelligenceSchema.properties), [
-    'document', 'confidence', 'tenant', 'landlord', 'property', 'financial',
-    'tenancy', 'utilities', 'legal', 'clauses', 'risks', 'warnings'
+    'document', 'confidence', 'tenant', 'landlord', 'contacts', 'property', 'financial', 'deposit_details',
+    'tenancy', 'notice_details', 'payment', 'utilities', 'parking', 'inventory', 'clause_coverage',
+    'legal', 'clauses', 'risks', 'warnings'
   ]);
   assert.equal(tenancyLegalIntelligenceSchema.additionalProperties, false);
 });
@@ -174,14 +175,14 @@ test('AI summary includes normalized duration, rental, deposits, renewal and ris
   });
   const summary = createTenancySummary(extraction);
   assert.match(summary, /2-year residential tenancy/i);
-  assert.match(summary, /RM3,500 monthly rental/);
-  assert.match(summary, /RM7,000 security deposit/);
-  assert.match(summary, /RM1,750 utility deposit/);
+  assert.match(summary, /RM 3,500\.00 monthly rental/);
+  assert.match(summary, /RM 7,000\.00 security deposit/);
+  assert.match(summary, /RM 1,750\.00 utility deposit/);
   assert.match(summary, /Renewal option available/);
   assert.match(summary, /2 legal risks detected/);
 });
 
-test('GPT client retries transient failures and preserves field-level confidence', async () => {
+test('GPT client retries a transient failure once only and preserves field-level confidence', async () => {
   let calls = 0;
   const expected = baseExtraction({
     field_confidence: { 'tenant.name': 98, 'financial.monthly_rental': 100, 'tenancy.renewal_option': 65 },
@@ -191,12 +192,12 @@ test('GPT client retries transient failures and preserves field-level confidence
   });
   const fetcher: typeof fetch = async () => {
     calls += 1;
-    return calls < 3 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
+    return calls < 2 ? new Response(JSON.stringify({ error: { message: 'retry' } }), { status: 429 }) : responseFor(expected);
   };
   const result = await extractTenancyText(`${'Complete Malaysian tenancy agreement. '.repeat(8)} Tenant: Tenant`, 'retry.pdf', {
     apiKey: 'retry-key', model: 'gpt-5.5', fetcher
   });
-  assert.equal(calls, 3);
+  assert.equal(calls, 2);
   assert.equal(result.extraction.field_confidence['tenant.name'], 79);
   assert.equal(result.extraction.field_confidence['tenancy.renewal_option'], 79);
   assert.ok(Object.keys(result.extraction.field_confidence).length >= 40);
@@ -235,10 +236,10 @@ test('Sprint 011 preserves source references, corrections, duplicate hashes and 
   assert.match(migration, /sprint_011_import_tenancy_legal_intelligence/i);
   assert.match(migration, /set document_hash = imported_document_hash/i);
   assert.match(migration, /security invoker/i);
-  assert.match(confirmRoute, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
+  assert.match(confirmRoute, /upload_end_to_end_import_tenancy/);
   assert.match(uploadRoute, /documentHash = createHash\('sha256'\)/);
   assert.match(uploadRoute, /rollbackStatus: 'document-preserved'/);
-  assert.match(uploadRoute, /sprint_005_create_document_bundle/);
+  assert.match(uploadRoute, /upload_end_to_end_preserve_failed_upload/);
   assert.match(commandCentre, /userCorrections: reviewCorrections/);
 });
 
@@ -254,7 +255,7 @@ test('Sprint 009 persistence is atomic, workspace-scoped, and writes every requi
   }
   assert.match(migration, /revoke all on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) from public, anon/i);
   assert.match(migration, /grant execute on function public\.sprint_009_import_tenancy_legal_intelligence\(uuid, jsonb\) to authenticated/i);
-  assert.match(route, /\.rpc\('sprint_015_import_tenancy_legal_intelligence'/);
+  assert.match(route, /upload_end_to_end_import_tenancy/);
   assert.match(readFileSync('supabase/migrations/202607170200_sprint_011_ai_legal_stabilization.sql', 'utf8'), /public\.sprint_009_import_tenancy_legal_intelligence\(p_workspace_id, p_payload\)/);
   assert.doesNotMatch(route, /service[_-]?role/i);
 });

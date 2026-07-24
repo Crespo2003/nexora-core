@@ -5,11 +5,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Building2, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardList,
   Download, Eye, FileText, Filter, Handshake, Image, Languages, LayoutDashboard, ListFilter, MapPin, Menu, Plus,
-  RefreshCw, Search, Sparkles, Store, Trash2, Upload, UserRound, UsersRound, X
+  RefreshCw, Search, Sparkles, Store, Target, Trash2, Upload, UserRound, UsersRound, X
 } from 'lucide-react';
 import { nextDealStages } from '../../lib/commercial/deals';
+import { DateInput, DateTimeInput } from '../../lib/dates/DateInput';
+import { currentIsoMonth, displayDateTimeToIso, formatNexoraDate, formatNexoraDateTime } from '../../lib/dates/formatDate';
+import { formatMYR } from '../../lib/formatters';
 
-type View = 'dashboard' | 'companies' | 'contacts' | 'requirements' | 'listings' | 'matches' | 'deals' | 'followups';
+type View = 'dashboard' | 'companies' | 'contacts' | 'requirements' | 'listings' | 'matches' | 'deals' | 'followups' | 'leads';
 type Row = Record<string, unknown> & { id: string };
 type Language = 'en' | 'zh';
 
@@ -20,6 +23,7 @@ const nav: Array<{ view: View; href: string; en: string; zh: string; icon: typeo
   { view: 'requirements', href: '/commercial/requirements', en: 'Requirements', zh: '物业需求', icon: ClipboardList },
   { view: 'listings', href: '/commercial/listings', en: 'Listings', zh: '商业盘源', icon: Store },
   { view: 'matches', href: '/commercial/matches', en: 'Matches', zh: '智能配对', icon: Sparkles },
+  { view: 'leads', href: '/commercial/leads', en: 'Lead Pipeline', zh: '线索管道', icon: Target },
   { view: 'deals', href: '/commercial/deals', en: 'Deals', zh: '交易管道', icon: Handshake },
   { view: 'followups', href: '/commercial/follow-ups', en: 'Follow-ups', zh: '跟进中心', icon: CalendarClock }
 ];
@@ -47,7 +51,7 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
   const [matchResults, setMatchResults] = useState<Array<{ listing: Row; result: Row }>>([]);
   const t = copy[language];
   const canEdit = ['owner', 'admin', 'manager', 'agent'].includes(role) || (view === 'deals' && role === 'finance');
-  const resource = view === 'dashboard' ? null : view === 'followups' ? 'followups' : view;
+  const resource = view === 'dashboard' ? null : view === 'followups' ? 'followups' : view === 'leads' ? 'requirements' : view;
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -111,17 +115,29 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
   }
 
   async function actOnFollowup(id: string, action: 'complete' | 'reschedule' | 'note' | 'assign') {
-    const dueAt = action === 'reschedule' ? window.prompt(language === 'zh' ? '新的日期时间（YYYY-MM-DD HH:mm）' : 'New date and time (YYYY-MM-DD HH:mm)') : null;
+    const dueAt = action === 'reschedule' ? window.prompt(language === 'zh' ? '新的日期时间（DD/MM/YYYY HH:mm）' : 'New date and time (DD/MM/YYYY HH:mm)') : null;
     if (action === 'reschedule' && !dueAt) return;
     const note = action === 'note' ? window.prompt(language === 'zh' ? '输入跟进备注' : 'Enter follow-up note') : null;
     if (action === 'note' && !note) return;
     const assignedUserId = action === 'assign' ? window.prompt(language === 'zh' ? '输入工作区用户 ID' : 'Enter workspace user ID') : null;
     if (action === 'assign' && !assignedUserId) return;
     try {
-      const changes = action === 'complete' ? { id, status: 'completed', completed_at: new Date().toISOString() } : action === 'reschedule' ? { id, due_at: new Date(String(dueAt)).toISOString(), status: 'open' } : action === 'note' ? { id, note } : { id, assigned_user_id: assignedUserId };
+      const rescheduledAt = dueAt ? displayDateTimeToIso(dueAt) : null;
+      if (action === 'reschedule' && !rescheduledAt) { setNotice(language === 'zh' ? '请输入 DD/MM/YYYY HH:mm 格式。' : 'Use DD/MM/YYYY HH:mm.'); return; }
+      const changes = action === 'complete' ? { id, status: 'completed', completed_at: new Date().toISOString() } : action === 'reschedule' ? { id, due_at: rescheduledAt, status: 'open' } : action === 'note' ? { id, note } : { id, assigned_user_id: assignedUserId };
       const response = await fetch('/api/commercial/followups', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
       const result = await response.json(); if (!response.ok || !result.success) throw new Error(result.technicalReference ?? 'followup-action-failed');
       setNotice(language === 'zh' ? '跟进已更新。' : 'Follow-up updated.'); await load();
+    } catch { setNotice(t.error); }
+  }
+
+  async function advanceLead(id: string, status: string) {
+    try {
+      const response = await fetch('/api/commercial/requirements', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, status }) });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.technicalReference ?? 'advance-failed');
+      setNotice(language === 'zh' ? '线索已推进。' : 'Lead advanced.');
+      void load();
     } catch { setNotice(t.error); }
   }
 
@@ -129,7 +145,7 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
     <aside className={`commercial-sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="commercial-brand"><span>N</span><div><strong>Nexora</strong><small>Commercial OS</small></div><button onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={18} /></button></div>
       <nav>{nav.map((item) => { const Icon = item.icon; return <Link key={item.view} href={item.href} className={item.view === view ? 'active' : ''}><Icon size={17} /><span>{item[language]}</span></Link>; })}</nav>
-      <Link href="/" className="commercial-back"><ArrowLeft size={16} />{language === 'zh' ? '租赁指挥中心' : 'Rental Command Centre'}</Link>
+      <Link href="/home" className="commercial-back"><ArrowLeft size={16} />{language === 'zh' ? '返回首页' : 'Back to Home'}</Link>
     </aside>
     <section className="commercial-main">
       <header className="commercial-header">
@@ -148,6 +164,7 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
         view === 'matches' ? <Matches language={language} requirements={dashboard.requirements ?? []} stored={rows} results={matchResults} requirementId={requirementId} setRequirementId={setRequirementId} run={() => void runMatching()} action={(id, value) => void actOnMatch(id, value)} t={t} /> :
         view === 'deals' ? <Deals rows={rows} language={language} mode={pipelineMode} setMode={setPipelineMode} /> :
         view === 'followups' ? <Followups rows={rows} language={language} action={(id, value) => void actOnFollowup(id, value)} /> :
+        view === 'leads' ? <LeadPipeline rows={rows} language={language} onAdvance={(id, status) => void advanceLead(id, status)} /> :
         detailId ? <Detail view={view} row={rows[0]} language={language} role={role} /> :
         <RecordList view={view} rows={rows} language={language} />}
     </section>
@@ -156,13 +173,13 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
       {['companies','contacts','requirements','listings'].includes(resource) && canEdit && <button className="commercial-secondary" onClick={() => setImportOpen(true)}><Upload size={16} />{t.import}</button>}
       {canEdit ? <button className="commercial-primary" onClick={() => setFormOpen(true)}><Plus size={16} />{t.create}</button> : <span>{t.noAccess}</span>}
     </div>}
-    {formOpen && resource && <RecordForm resource={resource} language={language} close={() => setFormOpen(false)} saved={() => { setFormOpen(false); setNotice(language === 'zh' ? '记录已保存。' : 'Record saved.'); void load(); }} />}
+    {formOpen && resource && <RecordForm resource={view === 'leads' ? 'leads' : resource} language={language} close={() => setFormOpen(false)} saved={() => { setFormOpen(false); setNotice(language === 'zh' ? '记录已保存。' : 'Record saved.'); void load(); }} />}
     {importOpen && resource && <CsvImportModal resource={resource} language={language} close={() => setImportOpen(false)} completed={(count) => { setImportOpen(false); setNotice(language === 'zh' ? `已导入 ${count} 条记录。` : `${count} records imported.`); void load(); }} />}
   </main>;
 }
 
 function Dashboard({ data, language }: { data: Record<string, Row[]>; language: Language }) {
-  const deals = data.deals ?? []; const followups = data.followups ?? []; const now = new Date(); const month = now.toISOString().slice(0, 7);
+  const deals = data.deals ?? []; const followups = data.followups ?? []; const now = new Date(); const month = currentIsoMonth(now);
   const metrics = [
     ['Active requirements', '有效需求', (data.requirements ?? []).filter((row) => !['completed','lost','cancelled'].includes(String(row.status))).length],
     ['Active listings', '有效盘源', (data.listings ?? []).filter((row) => row.status === 'active').length],
@@ -228,7 +245,22 @@ function DealEditor({ row, language, role }: { row: Row; language: Language; rol
   const financeOnly = role === 'finance'; const canManage = ['owner','admin','manager','agent','finance'].includes(role); const [values,setValues]=useState({stage:String(row.stage),probability:String(row.probability??0),expected_commission:String(row.expected_commission??0),next_action:String(row.next_action??''),next_follow_up:String(row.next_follow_up??''),target_close_date:String(row.target_close_date??''),loss_reason:String(row.loss_reason??''),notes:String(row.notes??'')}); const [saving,setSaving]=useState(false); const [message,setMessage]=useState('');
   if(!canManage)return null; const stages=[String(row.stage),...nextDealStages(String(row.stage))];
   async function save(){setSaving(true);setMessage('');const payload:Row={id:row.id,probability:Number(values.probability),expected_commission:Number(values.expected_commission),notes:values.notes};if(!financeOnly)Object.assign(payload,{stage:values.stage,next_action:values.next_action,next_follow_up:values.next_follow_up||null,target_close_date:values.target_close_date||null,loss_reason:values.loss_reason});const response=await fetch('/api/commercial/deals',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();setSaving(false);if(!response.ok||!result.success){setMessage(language==='zh'?`无法保存：${result.technicalReference??'请求失败'}`:`Could not save: ${result.technicalReference??'request failed'}`);return;}setMessage(language==='zh'?'交易已更新。':'Deal updated.');window.setTimeout(()=>window.location.reload(),500);}
-  return <section className="commercial-deal-editor"><div className="commercial-section-head"><SectionTitle icon={Handshake} title={language==='zh'?'交易控制':'Deal controls'}/><button className="commercial-primary" disabled={saving} onClick={()=>void save()}>{saving?'...':language==='zh'?'保存更改':'Save changes'}</button></div>{message&&<div className="commercial-notice">{message}</div>}<div className="commercial-form-grid">{!financeOnly&&<><label><span>{language==='zh'?'允许的下一阶段':'Permitted next stage'}</span><select value={values.stage} onChange={event=>setValues({...values,stage:event.target.value})}>{stages.map(stage=><option key={stage} value={stage}>{statusLabel(stage,language)}</option>)}</select></label><label><span>{language==='zh'?'下一步行动':'Next action'}</span><input value={values.next_action} onChange={event=>setValues({...values,next_action:event.target.value})}/></label><label><span>{language==='zh'?'下次跟进':'Next follow-up'}</span><input type="date" value={values.next_follow_up} onChange={event=>setValues({...values,next_follow_up:event.target.value})}/></label><label><span>{language==='zh'?'目标成交日期':'Target close date'}</span><input type="date" value={values.target_close_date} onChange={event=>setValues({...values,target_close_date:event.target.value})}/></label><label className="wide"><span>{language==='zh'?'失败原因':'Loss reason'}</span><input value={values.loss_reason} onChange={event=>setValues({...values,loss_reason:event.target.value})}/></label></>}<label><span>{language==='zh'?'成交概率 %':'Probability %'}</span><input type="number" min="0" max="100" value={values.probability} onChange={event=>setValues({...values,probability:event.target.value})}/></label><label><span>{language==='zh'?'预计佣金':'Expected commission'}</span><input type="number" min="0" value={values.expected_commission} onChange={event=>setValues({...values,expected_commission:event.target.value})}/></label><label className="wide"><span>{language==='zh'?'备注':'Notes'}</span><textarea value={values.notes} onChange={event=>setValues({...values,notes:event.target.value})}/></label></div></section>;
+  return <section className="commercial-deal-editor">
+    <div className="commercial-section-head"><SectionTitle icon={Handshake} title={language === 'zh' ? '交易控制' : 'Deal controls'} /><button className="commercial-primary" disabled={saving} onClick={() => void save()}>{saving ? '...' : language === 'zh' ? '保存更改' : 'Save changes'}</button></div>
+    {message && <div className="commercial-notice">{message}</div>}
+    <div className="commercial-form-grid">
+      {!financeOnly && <>
+        <label><span>{language === 'zh' ? '允许的下一阶段' : 'Permitted next stage'}</span><select value={values.stage} onChange={(event) => setValues({ ...values, stage: event.target.value })}>{stages.map((stage) => <option key={stage} value={stage}>{statusLabel(stage, language)}</option>)}</select></label>
+        <label><span>{language === 'zh' ? '下一步行动' : 'Next action'}</span><input value={values.next_action} onChange={(event) => setValues({ ...values, next_action: event.target.value })} /></label>
+        <label><span>{language === 'zh' ? '下次跟进' : 'Next follow-up'}</span><DateInput value={values.next_follow_up} onValueChange={(value) => setValues({ ...values, next_follow_up: value })} /></label>
+        <label><span>{language === 'zh' ? '目标成交日期' : 'Target close date'}</span><DateInput value={values.target_close_date} onValueChange={(value) => setValues({ ...values, target_close_date: value })} /></label>
+        <label className="wide"><span>{language === 'zh' ? '失败原因' : 'Loss reason'}</span><input value={values.loss_reason} onChange={(event) => setValues({ ...values, loss_reason: event.target.value })} /></label>
+      </>}
+      <label><span>{language === 'zh' ? '成交概率 %' : 'Probability %'}</span><input type="number" min="0" max="100" value={values.probability} onChange={(event) => setValues({ ...values, probability: event.target.value })} /></label>
+      <label><span>{language === 'zh' ? '预计佣金' : 'Expected commission'}</span><input type="number" min="0" value={values.expected_commission} onChange={(event) => setValues({ ...values, expected_commission: event.target.value })} /></label>
+      <label className="wide"><span>{language === 'zh' ? '备注' : 'Notes'}</span><textarea value={values.notes} onChange={(event) => setValues({ ...values, notes: event.target.value })} /></label>
+    </div>
+  </section>;
 }
 
 type MediaRow = { id: string; media_type: string; display_name: string; mime_type: string; file_size: number; created_at: string };
@@ -244,8 +276,8 @@ function MediaPanel({ listingId, language, role }: { listingId: string; language
 
 function RecordForm({ resource, language, close, saved }: { resource: string; language: Language; close: () => void; saved: () => void }) {
   const fields = formFields(resource); const [values, setValues] = useState<Record<string, string | boolean>>(() => Object.fromEntries(fields.map((field) => [field.key, field.type === 'checkbox' ? false : field.type === 'select' ? field.default ?? field.options?.[0] ?? '' : field.default ?? '']))); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
-  async function submit(event: React.FormEvent) { event.preventDefault(); setSaving(true); setError(''); try { const payload = Object.fromEntries(Object.entries(values).filter(([, value]) => typeof value !== 'string' || value.trim() !== '').map(([key, value]) => [key, typeof value === 'string' && numericFields.has(key) ? Number(value) : arrayFields.has(key) ? String(value).split(',').map((item) => item.trim()).filter(Boolean) : value])); const response = await fetch(`/api/commercial/${resource}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const result = await response.json(); if (!response.ok || !result.success) throw new Error(result.technicalReference ?? 'save-failed'); saved(); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'save-failed'); } finally { setSaving(false); } }
-  return <div className="commercial-modal" role="dialog" aria-modal="true"><form onSubmit={submit}><header><div><p>{language === 'zh' ? '新建商业记录' : 'New commercial record'}</p><h2>{resource}</h2></div><button type="button" onClick={close}><X size={18} /></button></header>{error && <div className="commercial-form-error">{error}</div>}<div className="commercial-form-grid">{fields.map((field) => <label key={field.key} className={field.wide ? 'wide' : ''}><span>{language === 'zh' ? field.zh : field.en}</span>{field.type === 'select' ? <select required={field.required} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}>{field.options?.map((option) => <option key={option} value={option}>{statusLabel(option, language)}</option>)}</select> : field.type === 'checkbox' ? <input type="checkbox" checked={Boolean(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.checked })} /> : field.type === 'textarea' ? <textarea rows={3} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })} /> : <input type={field.type ?? 'text'} required={field.required} min={field.type === 'number' ? 0 : undefined} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })} />}</label>)}</div><footer><button type="button" className="commercial-secondary" onClick={close}>{copy[language].cancel}</button><button className="commercial-primary" disabled={saving}>{saving ? '...' : copy[language].save}</button></footer></form></div>;
+  async function submit(event: React.FormEvent) { event.preventDefault(); setSaving(true); setError(''); try { const payload = Object.fromEntries(Object.entries(values).filter(([, value]) => typeof value !== 'string' || value.trim() !== '').map(([key, value]) => [key, typeof value === 'string' && numericFields.has(key) ? Number(value) : arrayFields.has(key) ? String(value).split(',').map((item) => item.trim()).filter(Boolean) : value])); const apiResource = resource === 'leads' ? 'requirements' : resource; const response = await fetch(`/api/commercial/${apiResource}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const result = await response.json(); if (!response.ok || !result.success) throw new Error(result.technicalReference ?? 'save-failed'); saved(); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'save-failed'); } finally { setSaving(false); } }
+  return <div className="commercial-modal" role="dialog" aria-modal="true"><form onSubmit={submit}><header><div><p>{language === 'zh' ? '新建商业记录' : 'New commercial record'}</p><h2>{resource}</h2></div><button type="button" onClick={close}><X size={18} /></button></header>{error && <div className="commercial-form-error">{error}</div>}<div className="commercial-form-grid">{fields.map((field) => <label key={field.key} className={field.wide ? 'wide' : ''}><span>{language === 'zh' ? field.zh : field.en}</span>{field.type === 'select' ? <select required={field.required} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}>{field.options?.map((option) => <option key={option} value={option}>{statusLabel(option, language)}</option>)}</select> : field.type === 'checkbox' ? <input type="checkbox" checked={Boolean(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.checked })} /> : field.type === 'textarea' ? <textarea rows={3} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })} /> : field.type === 'date' ? <DateInput required={field.required} value={String(values[field.key])} onValueChange={(value) => setValues({ ...values, [field.key]: value })} /> : field.type === 'datetime-local' ? <DateTimeInput required={field.required} value={String(values[field.key])} onValueChange={(value) => setValues({ ...values, [field.key]: value })} /> : <input type={field.type ?? 'text'} required={field.required} min={field.type === 'number' ? 0 : undefined} value={String(values[field.key])} onChange={(event) => setValues({ ...values, [field.key]: event.target.value })} />}</label>)}</div><footer><button type="button" className="commercial-secondary" onClick={close}>{copy[language].cancel}</button><button className="commercial-primary" disabled={saving}>{saving ? '...' : copy[language].save}</button></footer></form></div>;
 }
 
 type CsvResult = { preview: { headers: string[]; rows: Record<string,string>[]; errors: Array<{row:number;message:string}>; duplicates:number[] }; previewHash: string; validRowCount: number; invalidRowCount: number; errorReportCsv: string };
@@ -265,9 +297,50 @@ function formFields(resource: string): Field[] {
     requirements: [{ key:'title',en:'Requirement title',zh:'需求标题',required:true,wide:true },{ key:'company_id',en:'Company ID',zh:'公司编号' },{ key:'requirement_type',en:'Requirement type',zh:'需求类型',type:'select',options:['retail','restaurant','cafe','showroom','commercial_bungalow','office','warehouse','industrial','land','mall_lot','shoplot','hotel','mixed_use','other'] },{ key:'transaction_type',en:'Transaction',zh:'交易类型',type:'select',options:['rent','sale','either'] },{ key:'preferred_locations',en:'Preferred locations',zh:'首选地点',wide:true },{ key:'excluded_locations',en:'Excluded locations',zh:'排除地点',wide:true },{ key:'min_built_up',en:'Minimum built-up (sq ft)',zh:'最低建筑面积',type:'number' },{ key:'max_built_up',en:'Maximum built-up (sq ft)',zh:'最高建筑面积',type:'number' },{ key:'max_rental',en:'Maximum rental (RM)',zh:'最高租金',type:'number' },{ key:'ground_floor_required',en:'Ground floor required',zh:'必须底层',type:'checkbox' },{ key:'three_phase_required',en:'Three-phase required',zh:'需要三相电',type:'checkbox' },{ key:'exhaust_required',en:'Exhaust required',zh:'需要排气系统',type:'checkbox' },{ key:'grease_trap_required',en:'Grease trap required',zh:'需要隔油池',type:'checkbox' },{ key:'urgency',en:'Urgency',zh:'紧急程度',type:'select',options:['immediate','within_30_days','within_60_days','within_90_days','exploratory'] },{ key:'status',en:'Status',zh:'状态',type:'select',options:['new_enquiry','qualified','sourcing','proposal_prepared','proposed','viewing_arranged','viewed','shortlisted','negotiation','loi','tenancy_agreement','sale_and_purchase','completed','paused','lost','cancelled'] },{ key:'notes',en:'Notes',zh:'备注',type:'textarea',wide:true }],
     listings: [{ key:'title',en:'Listing title',zh:'盘源标题',required:true,wide:true },{ key:'property_name',en:'Property name',zh:'物业名称' },{ key:'property_type',en:'Property type',zh:'物业类型',required:true },{ key:'transaction_type',en:'Transaction',zh:'交易类型',type:'select',options:['rent','sale','either'] },{ key:'state',en:'State',zh:'州属' },{ key:'city',en:'City',zh:'城市' },{ key:'area',en:'Area',zh:'地区' },{ key:'address',en:'Exact address',zh:'详细地址',wide:true },{ key:'concealed_address',en:'Concealed address',zh:'隐藏地址',wide:true },{ key:'built_up',en:'Built-up (sq ft)',zh:'建筑面积',type:'number' },{ key:'asking_rental',en:'Asking rental (RM)',zh:'出租价',type:'number' },{ key:'asking_sale_price',en:'Asking sale price (RM)',zh:'售价',type:'number' },{ key:'ground_floor',en:'Ground floor',zh:'底层',type:'checkbox' },{ key:'three_phase_electricity',en:'Three-phase electricity',zh:'三相电',type:'checkbox' },{ key:'exhaust',en:'Exhaust',zh:'排气系统',type:'checkbox' },{ key:'grease_trap',en:'Grease trap',zh:'隔油池',type:'checkbox' },{ key:'commercial_zoning',en:'Commercial zoning',zh:'商业用途分区',type:'checkbox' },{ key:'confidentiality_level',en:'Confidentiality',zh:'保密级别',type:'select',options:['normal','internal_only','restricted','highly_confidential'] },{ key:'status',en:'Status',zh:'状态',type:'select',options:['draft','active','under_offer','reserved','rented','sold','temporarily_unavailable','expired','archived'] },{ key:'notes',en:'Notes',zh:'备注',type:'textarea',wide:true }],
     deals: [{ key:'title',en:'Deal title',zh:'交易标题',required:true,wide:true },{ key:'company_id',en:'Company ID',zh:'公司编号' },{ key:'requirement_id',en:'Requirement ID',zh:'需求编号' },{ key:'listing_id',en:'Listing ID',zh:'盘源编号' },{ key:'deal_value',en:'Deal value (RM)',zh:'交易价值',type:'number' },{ key:'expected_commission',en:'Expected commission (RM)',zh:'预计佣金',type:'number' },{ key:'commission_share',en:'Commission share (%)',zh:'佣金比例',type:'number',default:'100' },{ key:'stage',en:'Stage',zh:'阶段',type:'select',options:['enquiry','qualification','sourcing','proposal','viewing','shortlisted','negotiation','loi','due_diligence','tenancy_agreement','spa','deposit_paid','handover','completed','lost','cancelled'] },{ key:'probability',en:'Probability (%)',zh:'成交概率',type:'number',default:'10' },{ key:'next_action',en:'Next action',zh:'下一步行动',wide:true },{ key:'next_follow_up',en:'Next follow-up',zh:'下次跟进',type:'date' },{ key:'notes',en:'Notes',zh:'备注',type:'textarea',wide:true }],
-    followups: [{ key:'follow_up_type',en:'Follow-up type',zh:'跟进类型',type:'select',options:['call','whatsapp_draft','email_draft','proposal_feedback','viewing_feedback','listing_verification'] },{ key:'due_at',en:'Due date and time',zh:'到期日期时间',type:'datetime-local',required:true },{ key:'priority',en:'Priority',zh:'优先级',type:'select',options:['low','normal','high','urgent'] },{ key:'company_id',en:'Company ID',zh:'公司编号' },{ key:'contact_id',en:'Contact ID',zh:'联系人编号' },{ key:'requirement_id',en:'Requirement ID',zh:'需求编号' },{ key:'listing_id',en:'Listing ID',zh:'盘源编号' },{ key:'deal_id',en:'Deal ID',zh:'交易编号' },{ key:'proposal_id',en:'Proposal ID',zh:'提案编号' },{ key:'viewing_id',en:'Viewing ID',zh:'看房编号' },{ key:'assigned_user_id',en:'Assigned user ID',zh:'分配用户编号' },{ key:'note',en:'Note',zh:'备注',type:'textarea',wide:true },{ key:'draft_text',en:'Message draft',zh:'信息草稿',type:'textarea',wide:true }]
+    followups: [{ key:'follow_up_type',en:'Follow-up type',zh:'跟进类型',type:'select',options:['call','whatsapp_draft','email_draft','proposal_feedback','viewing_feedback','listing_verification'] },{ key:'due_at',en:'Due date and time',zh:'到期日期时间',type:'datetime-local',required:true },{ key:'priority',en:'Priority',zh:'优先级',type:'select',options:['low','normal','high','urgent'] },{ key:'company_id',en:'Company ID',zh:'公司编号' },{ key:'contact_id',en:'Contact ID',zh:'联系人编号' },{ key:'requirement_id',en:'Requirement ID',zh:'需求编号' },{ key:'listing_id',en:'Listing ID',zh:'盘源编号' },{ key:'deal_id',en:'Deal ID',zh:'交易编号' },{ key:'proposal_id',en:'Proposal ID',zh:'提案编号' },{ key:'viewing_id',en:'Viewing ID',zh:'看房编号' },{ key:'assigned_user_id',en:'Assigned user ID',zh:'分配用户编号' },{ key:'note',en:'Note',zh:'备注',type:'textarea',wide:true },{ key:'draft_text',en:'Message draft',zh:'信息草稿',type:'textarea',wide:true }],
+    leads: [{ key:'title',en:'Client / requirement title',zh:'客户/需求标题',required:true,wide:true },{ key:'requirement_type',en:'Business type',zh:'业务类别',type:'select',options:['f&b','restaurant','cafe','retail','fashion','beauty','wellness','education','medical','automotive','showroom','office','warehouse','industrial','other'] },{ key:'preferred_locations',en:'Preferred area (comma-separated)',zh:'首选地区（逗号分隔）',wide:true },{ key:'max_rental',en:'Max budget / rental (RM)',zh:'最高预算（租金）',type:'number' },{ key:'urgency',en:'Timeline',zh:'时间线',type:'select',options:['immediate','within_30_days','within_60_days','within_90_days','exploratory'],default:'exploratory' },{ key:'next_follow_up',en:'Next follow-up',zh:'下次跟进',type:'date' },{ key:'notes',en:'Notes',zh:'备注',type:'textarea',wide:true }]
   };
   return common[resource] ?? [];
+}
+
+const LEAD_STAGES: Array<{ key: string; en: string; zh: string; statuses: Set<string>; next: string }> = [
+  { key: 'new_lead',    en: 'New Lead',      zh: '新线索',    statuses: new Set(['new_enquiry']),                                                                        next: 'qualified' },
+  { key: 'contacted',   en: 'Contacted',     zh: '已联系',    statuses: new Set(['qualified']),                                                                          next: 'viewing_arranged' },
+  { key: 'viewing',     en: 'Viewing',       zh: '看房中',    statuses: new Set(['sourcing','proposal_prepared','proposed','viewing_arranged','viewed']),                  next: 'negotiation' },
+  { key: 'negotiation', en: 'Negotiation',   zh: '谈判中',    statuses: new Set(['shortlisted','negotiation','loi','tenancy_agreement','sale_and_purchase']),             next: 'completed' },
+  { key: 'closed',      en: 'Closed / Lost', zh: '成交/丢单', statuses: new Set(['completed','paused','lost','cancelled']),                                              next: '' },
+];
+
+function LeadPipeline({ rows, language, onAdvance }: { rows: Row[]; language: Language; onAdvance: (id: string, status: string) => void }) {
+  function stageOf(status: string) { return LEAD_STAGES.find((s) => s.statuses.has(status))?.key ?? 'new_lead'; }
+  return (
+    <div className="commercial-kanban">
+      {LEAD_STAGES.map((stage) => {
+        const cards = rows.filter((r) => stageOf(String(r.status ?? '')) === stage.key);
+        return (
+          <section key={stage.key}>
+            <header><span>{language === 'zh' ? stage.zh : stage.en}</span><b>{cards.length}</b></header>
+            {!cards.length && <p style={{ fontSize: 12, color: '#64748b', padding: '6px 0' }}>{language === 'zh' ? '暂无线索' : 'No leads'}</p>}
+            {cards.map((row) => (
+              <article key={row.id}>
+                <Link href={`/commercial/requirements/${row.id}`} style={{ display: 'block', marginBottom: 8 }}>
+                  <strong style={{ display: 'block', fontSize: 13 }}>{String(row.title ?? '-')}</strong>
+                  <small style={{ display: 'block', marginTop: 4, color: '#7c8a9a', fontSize: 12 }}>
+                    {String(row.requirement_type ?? '').replaceAll('_', ' ')}{array(row.preferred_locations).length ? ` · ${array(row.preferred_locations).slice(0, 2).join(', ')}` : ''}
+                  </small>
+                  {row.max_rental ? <small style={{ display: 'block', marginTop: 3, color: '#67e8f9', fontSize: 12 }}>{currency(Number(row.max_rental))} max</small> : null}
+                </Link>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                  {stage.next && <button className="commercial-secondary" style={{ fontSize: 11, padding: '3px 10px' }} onClick={() => onAdvance(row.id, stage.next)}>{language === 'zh' ? '推进 →' : 'Advance →'}</button>}
+                  {stage.key === 'negotiation' && <button className="commercial-secondary" style={{ fontSize: 11, padding: '3px 10px', color: '#fca5a5', borderColor: 'rgba(252,165,165,0.3)' }} onClick={() => onAdvance(row.id, 'lost')}>{language === 'zh' ? '丢单' : 'Mark Lost'}</button>}
+                </div>
+              </article>
+            ))}
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 const numericFields = new Set(['min_built_up','max_built_up','max_rental','built_up','asking_rental','asking_sale_price','deal_value','expected_commission','commission_share','probability']);
@@ -285,8 +358,8 @@ function statusLabel(value: string, language: Language) { const normalized = val
 function matchLabel(value:string,language:Language){if(language==='en')return value;const zh:Record<string,string>={'Preferred location':'首选地点','Size range':'面积范围','Budget':'预算','Property type':'物业类型','Ground floor':'底层','Loading bay':'装卸区','Three-phase electricity':'三相电','Exhaust':'排气系统','Grease trap':'隔油池','Gas':'燃气','Water':'供水','Outdoor area':'户外区域','Swimming pool':'游泳池','Availability':'可用时间','Commercial zoning':'商业用途分区','Commercial exposure':'商业曝光','Built-up area':'建筑面积','Comparable budget':'可比较预算','Availability timing':'可用时间','Excluded location':'排除地点','Insufficient minimum size':'面积低于最低要求','Impossible budget':'超出最高预算','Wrong transaction type':'交易类型不符','Business use is prohibited':'禁止该商业用途','Listing unavailable':'盘源不可用','Commercial use not permitted':'不允许商业用途','Required Three-phase electricity absent':'缺少必需的三相电','Required Exhaust absent':'缺少必需的排气系统','Required Grease trap absent':'缺少必需的隔油池'};return zh[value]??value;}
 function followupLabel(bucket:string,language:Language){if(language==='en')return ({inactive_7:'No activity for at least 7 days',inactive_14:'No activity for at least 14 days',proposal_feedback:'Proposal response is outstanding',viewing_feedback:'Viewing feedback is outstanding',stalled_negotiation:'Negotiation has stalled',expiring_requirement:'Requirement expires within 30 days',listing_reverification:'Listing verification is due'} as Record<string,string>)[bucket]??bucket;return ({inactive_7:'至少七天没有活动',inactive_14:'至少十四天没有活动',proposal_feedback:'提案尚未收到回复',viewing_feedback:'看房反馈尚未完成',stalled_negotiation:'谈判已停滞',expiring_requirement:'需求将在三十天内到期',listing_reverification:'盘源需要重新验证'} as Record<string,string>)[bucket]??bucket;}
 function csvErrorLabel(value:string,language:Language){if(language==='en')return value.replaceAll(':',': ').replaceAll('-',' ');const [code,field]=value.split(':');const labels:Record<string,string>={'missing-column':'缺少列','required':'必填字段','duplicate-column':'重复列','row-limit-exceeded':'超过行数限制','invalid-number':'无效数字','invalid-id':'无效编号','invalid-value':'无效值','invalid-range':'无效范围','duplicate-existing-record':'现有记录重复','invalid-reference':'关联记录无效'};return `${labels[code]??value}${field?`：${label(field)}`:''}`;}
-function formatValue(key: string, value: unknown) { if (Array.isArray(value)) return value.join(', ') || '-'; if (key.includes('date') || key.endsWith('_at')) return dateTime(value); if (key.includes('rental') || key.includes('price') || key.includes('value') || key.includes('commission')) return currency(Number(value)); if (typeof value === 'boolean') return value ? 'Yes / 是' : 'No / 否'; return String(value); }
-function currency(value: number) { return new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR', maximumFractionDigits: 0 }).format(value || 0); }
-function date(value: unknown) { if (!value) return '-'; const parsed = new Date(String(value)); return Number.isNaN(parsed.getTime()) ? String(value) : new Intl.DateTimeFormat('en-GB').format(parsed); }
-function dateTime(value: unknown) { if (!value) return '-'; const parsed = new Date(String(value)); return Number.isNaN(parsed.getTime()) ? String(value) : new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(parsed); }
+function formatValue(key: string, value: unknown) { if (Array.isArray(value)) return value.join(', ') || '-'; if (key.includes('date') || key.endsWith('_at')) return dateTime(value); if (key.includes('rental') || key.includes('price') || key.includes('value') || key.includes('commission')) return currency(value); if (typeof value === 'boolean') return value ? 'Yes / 是' : 'No / 否'; return String(value); }
+function currency(value: unknown) { return formatMYR(value, '-'); }
+function date(value: unknown) { return formatNexoraDate(value, '-'); }
+function dateTime(value: unknown) { return formatNexoraDateTime(value, '-'); }
 function array(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }

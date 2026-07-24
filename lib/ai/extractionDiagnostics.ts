@@ -6,12 +6,26 @@ type DiagnosticDetails = {
   fileSize?: number;
   textLength?: number;
   usedOcr?: boolean;
+  pageNumber?: number;
+  pageCount?: number;
+  scannedPageCount?: number;
+  hasImages?: boolean;
+  ocrProvider?: string;
+  payloadType?: string;
+  payloadBytes?: number;
+  inputKind?: string;
+  ocrStatus?: string;
+  ocrCode?: string;
   openAiConfigured?: boolean;
   openAiKeyPresent?: boolean;
   configurationReason?: string;
   tenancyModel?: string;
   ocrModel?: string;
   attempt?: number;
+  aiCallCount?: number;
+  inputCharacterCount?: number;
+  estimatedInputTokens?: number;
+  maxOutputTokens?: number;
   statusCode?: number;
   elapsedMs?: number;
   errorName?: string;
@@ -30,6 +44,16 @@ type DiagnosticDetails = {
   provider?: 'openai' | 'deterministic';
   fallbackReason?: string | null;
   persisted?: boolean;
+  workspaceId?: string;
+  documentId?: string | null;
+  extractionId?: string | null;
+  tenancyId?: string | null;
+  processingStatus?: string | null;
+  role?: string;
+  postgrestCode?: string;
+  rpcName?: string;
+  linkedContactCount?: number;
+  warningCount?: number;
 };
 
 export function logExtractionDiagnostic(event: string, details: DiagnosticDetails = {}): void {

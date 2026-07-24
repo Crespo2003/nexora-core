@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import AppNav from '../components/AppNav';
 import type { TenancyExtraction } from '../../lib/ai/tenancyExtractor';
-import { displayDateToIso, isoToDisplayDate } from '../../lib/dates/formatDate';
+import { DateInput } from '../../lib/dates/DateInput';
+import { displayDateToIso, formatExtractedNexoraDate, isoToDisplayDate } from '../../lib/dates/formatDate';
 import type { DocumentExtractionRecord, DocumentRecord, DocumentType, ProcessingStatus, UploadQueueItem } from '../../lib/documents/types';
 import { documentTypes } from '../../lib/documents/types';
 import { validateDocumentFile } from '../../lib/documents/upload';
@@ -185,9 +187,9 @@ function reviewFormFromDocument(document: DocumentWithExtraction): ReviewForm {
     utilityDeposit: cleanNumber(fieldValue(extraction, 'financial.utilityDeposit')),
     accessCardDeposit: cleanNumber(fieldValue(extraction, 'financial.accessCardDeposit')),
     carParkRemoteDeposit: cleanNumber(fieldValue(extraction, 'financial.carParkRemoteDeposit')),
-    commencementDate: fieldValue(extraction, 'dates.commencementDate'),
-    expiryDate: fieldValue(extraction, 'dates.expiryDate'),
-    renewalReminder: fieldValue(extraction, 'dates.renewalReminder'),
+    commencementDate: formatExtractedNexoraDate(fieldValue(extraction, 'dates.commencementDate')),
+    expiryDate: formatExtractedNexoraDate(fieldValue(extraction, 'dates.expiryDate')),
+    renewalReminder: formatExtractedNexoraDate(fieldValue(extraction, 'dates.renewalReminder')),
     renewalOption: fieldValue(extraction, 'dates.renewalOption'),
     noticePeriod: fieldValue(extraction, 'dates.noticePeriod'),
     renewalHistory: fieldValue(extraction, 'clauses.renewalClause'),
@@ -289,6 +291,8 @@ export default function DocumentsPage() {
   const [selectedId, setSelectedId] = useState('');
   const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm());
   const [operationId, setOperationId] = useState('');
+  const [sortBy, setSortBy] = useState<'filename' | 'type' | 'date' | 'status'>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [filters, setFilters] = useState<Filters>({
     query: '',
     documentType: 'all',
@@ -307,6 +311,7 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
+    window.dispatchEvent(new CustomEvent('nexora-language-change', { detail: language }));
   }, [language]);
 
   useEffect(() => {
@@ -353,6 +358,12 @@ export default function DocumentsPage() {
     }
   }, [selectedDocument?.id]);
 
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   const metrics = useMemo(() => {
     return {
       total: documents.length,
@@ -389,6 +400,32 @@ export default function DocumentsPage() {
       return true;
     });
   }, [documents, filters, language]);
+
+  const sortedDocuments = useMemo(() => {
+    return [...filteredDocuments].sort((a, b) => {
+      let aVal = '';
+      let bVal = '';
+      if (sortBy === 'filename') { aVal = a.originalFilename; bVal = b.originalFilename; }
+      else if (sortBy === 'type') { aVal = a.documentType; bVal = b.documentType; }
+      else if (sortBy === 'date') { aVal = a.uploadedAt; bVal = b.uploadedAt; }
+      else { aVal = a.processingStatus; bVal = b.processingStatus; }
+      return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+  }, [filteredDocuments, sortBy, sortDir]);
+
+  function handleSort(col: typeof sortBy) {
+    if (sortBy === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(col);
+      setSortDir('asc');
+    }
+  }
+
+  function sortIndicator(col: typeof sortBy) {
+    if (sortBy !== col) return ' ↕';
+    return sortDir === 'asc' ? ' ↑' : ' ↓';
+  }
 
   function addFiles(files: FileList | File[]) {
     const nextItems = Array.from(files).map((file): QueueItem => {
@@ -448,6 +485,30 @@ export default function DocumentsPage() {
 
   function cancelQueueItem(itemId: string) {
     setQueue((current) => current.map((item) => item.id === itemId && item.status === 'queued' ? { ...item, status: 'cancelled', progress: 100 } : item));
+  }
+
+  async function deleteDocument(documentId: string) {
+    if (!window.confirm(t.confirmDeleteDocument)) return;
+    setOperationId(`delete-${documentId}`);
+    try {
+      const response = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await response.json() as { error?: string };
+        if (payload.error === 'linked-document') {
+          setNotice({ tone: 'error', message: t.documentLinkedCannotDelete });
+        } else {
+          setNotice({ tone: 'error', message: t.documentDeleteFailed });
+        }
+        return;
+      }
+      setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
+      setSelectedId((prev) => (prev === documentId ? '' : prev));
+      setNotice({ tone: 'success', message: t.documentDeleted });
+    } catch {
+      setNotice({ tone: 'error', message: t.documentDeleteFailed });
+    } finally {
+      setOperationId('');
+    }
   }
 
   async function openSignedUrl(documentId: string, disposition: 'inline' | 'attachment') {
@@ -510,19 +571,13 @@ export default function DocumentsPage() {
     <main className="command-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">NEXORA / Sprint 002</p>
+          <p className="eyebrow">NEXORA / Sprint 004</p>
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
-        <div className="header-actions">
+        <AppNav activePage="documents">
           <LanguageToggle language={language} onChange={setLanguage} />
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button" href="/">{t.navRental}</a>
-            <a className="ghost-button active" href="/documents">{t.navDocuments}</a>
-            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-          </nav>
-        </div>
+        </AppNav>
       </header>
 
       {notice && <div className={`notice ${notice.tone}`}>{notice.message}</div>}
@@ -599,6 +654,7 @@ export default function DocumentsPage() {
               onDraft={saveDraft}
               onImport={confirmImport}
               onSignedUrl={openSignedUrl}
+              onDelete={deleteDocument}
             />
           )}
         </div>
@@ -618,10 +674,18 @@ export default function DocumentsPage() {
           <EmptyState title={t.noDocuments} body={t.noDocumentsBody} />
         ) : (
           <div className="document-table">
-            {filteredDocuments.map((document) => {
+            <div className="document-row document-row-header">
+              <button className="doc-sort-btn" onClick={() => handleSort('filename')}>{t.filename}{sortIndicator('filename')}</button>
+              <button className="doc-sort-btn" onClick={() => handleSort('type')}>{t.documentType}{sortIndicator('type')}</button>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)' }}>{language === 'zh' ? '租客' : 'Tenant'}</span>
+              <button className="doc-sort-btn" onClick={() => handleSort('date')}>{t.uploadDate}{sortIndicator('date')}</button>
+              <button className="doc-sort-btn" onClick={() => handleSort('status')}>{t.extractionStatus}{sortIndicator('status')}</button>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)' }}>{language === 'zh' ? '操作' : 'Actions'}</span>
+            </div>
+            {sortedDocuments.map((document) => {
               const extraction = document.extraction?.extractedJson as TenancyExtraction | undefined;
               return (
-                <button className={`document-row ${selectedDocument?.id === document.id ? 'is-active' : ''}`} key={document.id} onClick={() => setSelectedId(document.id)}>
+                <div className={`document-row ${selectedDocument?.id === document.id ? 'is-active' : ''}`} key={document.id} onClick={() => setSelectedId(document.id)}>
                   <span>
                     <strong>{document.originalFilename}</strong>
                     <small>{documentTypeLabel(document.documentType, language)}</small>
@@ -630,7 +694,12 @@ export default function DocumentsPage() {
                   <span>{fieldValue(extraction, 'tenant.name') || t.notDetected}</span>
                   <span>{isoToDisplayDate(document.uploadedAt.slice(0, 10))}</span>
                   <span className={`status-pill ${document.processingStatus === 'extraction_failed' || document.processingStatus === 'ocr_required' ? 'overdue' : 'paid'}`}>{statusLabel(document.processingStatus, language)}</span>
-                </button>
+                  <div className="doc-row-actions" onClick={(e) => e.stopPropagation()}>
+                    <button className="action-chip" onClick={() => openSignedUrl(document.id, 'inline')} disabled={operationId === `inline-${document.id}`}>{language === 'zh' ? '预览' : 'View'}</button>
+                    <button className="action-chip action-chip--pay" onClick={() => openSignedUrl(document.id, 'attachment')} disabled={operationId === `dl-${document.id}`}>{language === 'zh' ? '下载' : 'DL'}</button>
+                    <button className="action-chip" style={{ borderColor: 'rgba(251,113,133,0.3)', background: 'rgba(251,113,133,0.08)', color: '#fecdd3' }} onClick={() => deleteDocument(document.id)} disabled={operationId === `delete-${document.id}`}>{language === 'zh' ? '删除' : 'Del'}</button>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -689,11 +758,11 @@ function FiltersPanel({ filters, language, onChange }: { filters: Filters; langu
       </label>
       <label className="field">
         <span>{t.fromDate}</span>
-        <input value={filters.fromDate} placeholder="DD/MM/YYYY" onChange={(event) => onChange({ ...filters, fromDate: event.target.value })} />
+        <DateInput value={filters.fromDate} onValueChange={(fromDate) => onChange({ ...filters, fromDate })} />
       </label>
       <label className="field">
         <span>{t.toDate}</span>
-        <input value={filters.toDate} placeholder="DD/MM/YYYY" onChange={(event) => onChange({ ...filters, toDate: event.target.value })} />
+        <DateInput value={filters.toDate} onValueChange={(toDate) => onChange({ ...filters, toDate })} />
       </label>
     </div>
   );
@@ -707,7 +776,8 @@ function DocumentReview({
   onChange,
   onDraft,
   onImport,
-  onSignedUrl
+  onSignedUrl,
+  onDelete
 }: {
   document: DocumentWithExtraction;
   form: ReviewForm;
@@ -717,6 +787,7 @@ function DocumentReview({
   onDraft: () => void;
   onImport: () => void;
   onSignedUrl: (documentId: string, disposition: 'inline' | 'attachment') => void;
+  onDelete: (documentId: string) => void;
 }) {
   const t = getDocumentTranslations(language);
   const extraction = document.extraction?.extractedJson as TenancyExtraction | undefined;
@@ -744,6 +815,7 @@ function DocumentReview({
       <div className="card-actions review-actions">
         <button className="ghost-button" onClick={() => onSignedUrl(document.id, 'inline')} disabled={operationId === `inline-${document.id}`}>{t.viewDocument}</button>
         <button className="ghost-button" onClick={() => onSignedUrl(document.id, 'attachment')} disabled={operationId === `attachment-${document.id}`}>{t.downloadDocument}</button>
+        <button className="ghost-button" onClick={() => onDelete(document.id)} disabled={operationId === `delete-${document.id}`}>{t.deleteDocument}</button>
       </div>
 
       <div>
@@ -759,9 +831,9 @@ function DocumentReview({
           <NumberField label={t.utilityDeposit} value={form.utilityDeposit} onChange={(value) => onChange({ ...form, utilityDeposit: value })} />
           <NumberField label={t.accessCardDeposit} value={form.accessCardDeposit} onChange={(value) => onChange({ ...form, accessCardDeposit: value })} />
           <NumberField label={t.carParkRemoteDeposit} value={form.carParkRemoteDeposit} onChange={(value) => onChange({ ...form, carParkRemoteDeposit: value })} />
-          <TextField label={t.commencementDate} value={form.commencementDate} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, commencementDate: value })} required />
-          <TextField label={t.expiryDate} value={form.expiryDate} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, expiryDate: value })} required />
-          <TextField label={t.renewalReminder} value={form.renewalReminder} placeholder="DD/MM/YYYY" onChange={(value) => onChange({ ...form, renewalReminder: value })} />
+          <DateField label={t.commencementDate} value={form.commencementDate} onChange={(value) => onChange({ ...form, commencementDate: value })} required />
+          <DateField label={t.expiryDate} value={form.expiryDate} onChange={(value) => onChange({ ...form, expiryDate: value })} required />
+          <DateField label={t.renewalReminder} value={form.renewalReminder} onChange={(value) => onChange({ ...form, renewalReminder: value })} />
           <TextField label={t.renewalOption} value={form.renewalOption} onChange={(value) => onChange({ ...form, renewalOption: value })} />
           <TextField label={t.noticePeriod} value={form.noticePeriod} onChange={(value) => onChange({ ...form, noticePeriod: value })} />
           <TextArea label={t.specialClauses} value={form.specialClauses} onChange={(value) => onChange({ ...form, specialClauses: value })} />
@@ -799,6 +871,15 @@ function TextField({ label, value, onChange, wide = false, required = false, pla
     <label className={wide ? 'wide field' : 'field'}>
       <span>{label}{required ? ' *' : ''}</span>
       <input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function DateField({ label, value, onChange, required = false }: { label: string; value: string; onChange: (value: string) => void; required?: boolean }) {
+  return (
+    <label className="field">
+      <span>{label}{required ? ' *' : ''}</span>
+      <DateInput value={value} onValueChange={onChange} required={required} />
     </label>
   );
 }

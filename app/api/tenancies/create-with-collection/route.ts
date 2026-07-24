@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import type { CollectionPayload, TenancyPayload } from '../../../../lib/rental/payloads';
+import { writeActivity } from '../../../../lib/activity/log';
 
 export async function POST(request: Request) {
   let createdTenancyId: string | null = null;
@@ -41,6 +42,8 @@ export async function POST(request: Request) {
       .single();
 
     if (collectionInsert.error) throw collectionInsert.error;
+
+    void writeActivity(supabase, workspaceId, 'tenancy', createdTenancyId, 'tenancy_created', { tenant: tenancy.tenant, property: tenancy.property });
 
     return NextResponse.json({
       tenancy: tenancyInsert.data,

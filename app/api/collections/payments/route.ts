@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { normalizeDateForStorage } from '../../../../lib/dates/formatDate';
+import { writeActivity } from '../../../../lib/activity/log';
 
 const methods = ['bank_transfer', 'cash', 'duitnow', 'touch_n_go', 'cheque', 'online_banking', 'other'];
 const transactionTypes = ['payment', 'advance_payment', 'adjustment', 'waiver', 'refund', 'reversal'];
@@ -18,7 +20,8 @@ export async function POST(request: Request) {
       transactionType?: string;
     };
 
-    if (!payload.rentalCollectionId || !Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) {
+    const paymentDate = normalizeDateForStorage(payload.paymentDate);
+    if (!payload.rentalCollectionId || !paymentDate || !Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) {
       return NextResponse.json({
         success: false,
         failedStage: 'validation',
@@ -45,7 +48,7 @@ export async function POST(request: Request) {
     const { supabase, workspaceId, user } = auth;
     const transaction = await supabase.rpc('sprint_005_record_collection_transaction', {
       p_workspace_id: workspaceId,
-      p_payload: { ...payload, recordedBy: payload.recordedBy ?? user.email ?? '' }
+      p_payload: { ...payload, paymentDate, recordedBy: payload.recordedBy ?? user.email ?? '' }
     });
     if (transaction.error) throw transaction.error;
     const result = transaction.data as {
@@ -55,6 +58,8 @@ export async function POST(request: Request) {
       credit: number;
       status: string;
     };
+
+    void writeActivity(supabase, workspaceId, 'collection', payload.rentalCollectionId, 'payment_recorded', { amount: payload.amount, method: payload.paymentMethod }, user.id);
 
     return NextResponse.json({
       success: true,

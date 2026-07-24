@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
 import { buildCollectionOverview } from '../../../../lib/collections/live';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { currentIsoDate, currentIsoMonth } from '../../../../lib/dates/formatDate';
 
 export const dynamic = 'force-dynamic';
 
 function monthBounds(month: string) {
   const start = `${month}-01`;
   const [year, monthNumber] = month.split('-').map(Number);
-  const end = new Date(year, monthNumber, 0).toISOString().slice(0, 10);
+  const end = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
   return { start, end };
 }
 
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const month = (url.searchParams.get('month') || new Date().toISOString().slice(0, 7)).slice(0, 7);
+    const month = (url.searchParams.get('month') || currentIsoMonth()).slice(0, 7);
     const language = url.searchParams.get('language') === 'zh' ? 'zh' : 'en';
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = currentIsoDate();
 
     if (!/^\d{4}-\d{2}$/.test(month)) {
       return NextResponse.json({ success: false, error: 'invalid-month', message: { en: 'Invalid collection month.', zh: '收款月份无效。' } }, { status: 400 });

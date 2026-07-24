@@ -1,3 +1,6 @@
+import { formatNexoraDate } from '../dates/formatDate';
+import { formatMYR } from '../formatters';
+
 export const clauseCategories = [
   'Rental payment', 'Late payment', 'Security deposit', 'Utility deposit', 'Access card deposit', 'Car park deposit',
   'Renewal', 'Notice period', 'Termination', 'Early termination', 'Default', 'Viewing rights', 'Entry and inspection',
@@ -295,9 +298,9 @@ function evaluateClauseRisks(facts: Facts, clauses: LegalClause[], rawText: stri
   const financial = record(facts.financial);
   const rental = money(financial.monthly_rental);
   const securityMonths = statedMonths(rawText, /security\s+deposit[\s\S]{0,90}?((?:\d+(?:\.\d+)?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve))\s*months?/i);
-  if (securityMonths && rental && Math.abs(rental * securityMonths - money(financial.security_deposit)) > 1) add('security_deposit_multiple_mismatch', 'high', 'Security deposit', 'Security deposit mismatch', 'The security deposit does not match the stated rental multiple.', 'Reconcile the stated multiple and payable amount.', sourceForPattern(rawText, /security\s+deposit[\s\S]{0,120}/i));
+  if (securityMonths && rental && Math.abs(rental * securityMonths - money(financial.security_deposit)) > 1) add('security_deposit_multiple_mismatch', 'high', 'Security deposit', 'Requires confirmation: security deposit mismatch', `The extracted security deposit is preserved, but it conflicts with the stated ${securityMonths}-month rental multiple.`, 'Requires confirmation: reconcile the stated multiple and payable amount without overwriting the extracted value.', sourceForPattern(rawText, /security\s+deposit[\s\S]{0,120}/i));
   const utilityMonths = statedMonths(rawText, /utility\s+deposit[\s\S]{0,90}?((?:\d+(?:\.\d+)?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve))\s*months?/i);
-  if (utilityMonths && rental && Math.abs(rental * utilityMonths - money(financial.utility_deposit)) > 1) add('utility_deposit_multiple_mismatch', 'high', 'Utility deposit', 'Utility deposit mismatch', 'The utility deposit does not match the stated rental multiple.', 'Reconcile the stated multiple and payable amount.', sourceForPattern(rawText, /utility\s+deposit[\s\S]{0,120}/i));
+  if (utilityMonths && rental && Math.abs(rental * utilityMonths - money(financial.utility_deposit)) > 1) add('utility_deposit_multiple_mismatch', 'high', 'Utility deposit', 'Requires confirmation: utility deposit mismatch', `The extracted utility deposit is preserved, but it conflicts with the stated ${utilityMonths}-month rental multiple.`, 'Requires confirmation: reconcile the stated multiple and payable amount without overwriting the extracted value.', sourceForPattern(rawText, /utility\s+deposit[\s\S]{0,120}/i));
   const tenancy = record(facts.tenancy);
   const start = text(tenancy.commencement_date);
   const end = text(tenancy.expiry_date);
@@ -344,9 +347,9 @@ function createExecutiveLegalSummary(facts: Facts, clauses: LegalClause[], risks
   const financial = record(facts.financial);
   const period = [formatDate(text(tenancy.commencement_date)), formatDate(text(tenancy.expiry_date))].filter(Boolean).join(' to ');
   const amounts = [
-    money(financial.monthly_rental) ? `RM${formatMoney(money(financial.monthly_rental))} monthly rental` : '',
-    money(financial.security_deposit) ? `RM${formatMoney(money(financial.security_deposit))} security deposit` : '',
-    money(financial.utility_deposit) ? `RM${formatMoney(money(financial.utility_deposit))} utility deposit` : ''
+    money(financial.monthly_rental) ? `${formatMYR(money(financial.monthly_rental))} monthly rental` : '',
+    money(financial.security_deposit) ? `${formatMYR(money(financial.security_deposit))} security deposit` : '',
+    money(financial.utility_deposit) ? `${formatMYR(money(financial.utility_deposit))} utility deposit` : ''
   ].filter(Boolean).join(', ');
   const maintenance = clauses.find((clause) => clause.category === 'Structural maintenance' || clause.category === 'General maintenance');
   const utilities = clauses.find((clause) => clause.category === 'Utilities');
@@ -427,7 +430,7 @@ function financialValue(result: LegalIntelligenceResult, key: string): string {
 
 function dateValue(result: LegalIntelligenceResult, key: string): string {
   if (result.normalized_fields[key]) return result.normalized_fields[key];
-  const match = result.executive_summary.match(key === 'commencement_date' ? /from ([A-Z][a-z]+ \d{1,2}, \d{4})/ : / to ([A-Z][a-z]+ \d{1,2}, \d{4})/);
+  const match = result.executive_summary.match(key === 'commencement_date' ? /from (\d{2}\/\d{2}\/\d{4})/ : / to (\d{2}\/\d{2}\/\d{4})/);
   return match?.[1] ?? '';
 }
 
@@ -435,13 +438,13 @@ function normalizedFields(facts: Facts): Record<string, string> {
   const financial = record(facts.financial);
   const tenancy = record(facts.tenancy);
   return {
-    monthly_rental: money(financial.monthly_rental) ? `RM${formatMoney(money(financial.monthly_rental))}` : '',
-    security_deposit: money(financial.security_deposit) ? `RM${formatMoney(money(financial.security_deposit))}` : '',
-    utility_deposit: money(financial.utility_deposit) ? `RM${formatMoney(money(financial.utility_deposit))}` : '',
-    access_card_deposit: money(financial.access_card_deposit) ? `RM${formatMoney(money(financial.access_card_deposit))}` : '',
-    car_park_deposit: money(financial.car_park_deposit) ? `RM${formatMoney(money(financial.car_park_deposit))}` : '',
-    commencement_date: text(tenancy.commencement_date),
-    expiry_date: text(tenancy.expiry_date),
+    monthly_rental: money(financial.monthly_rental) ? formatMYR(money(financial.monthly_rental)) : '',
+    security_deposit: money(financial.security_deposit) ? formatMYR(money(financial.security_deposit)) : '',
+    utility_deposit: money(financial.utility_deposit) ? formatMYR(money(financial.utility_deposit)) : '',
+    access_card_deposit: money(financial.access_card_deposit) ? formatMYR(money(financial.access_card_deposit)) : '',
+    car_park_deposit: money(financial.car_park_deposit) ? formatMYR(money(financial.car_park_deposit)) : '',
+    commencement_date: formatNexoraDate(text(tenancy.commencement_date)),
+    expiry_date: formatNexoraDate(text(tenancy.expiry_date)),
     payment_due_day: text(tenancy.payment_due_day),
     renewal_option: text(tenancy.renewal_option),
     notice_period: text(tenancy.notice_period),
@@ -545,7 +548,7 @@ function moneyImpact(value: string): string {
 
 function firstMoney(value: string): string {
   const match = value.match(/(?:RM|MYR)\s*([\d,]+(?:\.\d{1,2})?)/i);
-  return match ? `RM${match[1]}` : '';
+  return match ? formatMYR(Number(match[1].replace(/,/g, ''))) : '';
 }
 
 function labelledMoneyValues(value: string, pattern: RegExp): number[] {
@@ -615,11 +618,7 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}_${(hash >>> 0).toString(36)}`;
 }
 
-function formatDate(value: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-MY', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
-}
+function formatDate(value: string): string { return formatNexoraDate(value); }
 
 function formatMoney(value: number): string {
   return new Intl.NumberFormat('en-MY', { maximumFractionDigits: 2 }).format(value);

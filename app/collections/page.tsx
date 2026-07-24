@@ -1,11 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import AppNav from '../components/AppNav';
 import { formatDisplayDate, formatDisplayMonth, renderLandlordUpdate, renderTenantReminder } from '../../lib/collections/core';
 import type { CollectionOverview, CollectionOverviewRow } from '../../lib/collections/live';
 import type { Language } from '../../lib/collections/types';
 import { formatMYR } from '../../lib/formatters';
 import { defaultLanguage, languageStorageKey } from '../../lib/i18n/translations';
+import { DateInput } from '../../lib/dates/DateInput';
+import { currentIsoDate, currentIsoMonth, formatNexoraDate, normalizeDateForStorage } from '../../lib/dates/formatDate';
+import WhatsAppActions from '../../lib/whatsapp/WhatsAppActions';
 
 type UiLanguage = Exclude<Language, 'bilingual'>;
 type ViewKey = 'dashboard' | 'followups' | 'accounts' | 'upload' | 'payment' | 'reminder' | 'landlord' | 'detail';
@@ -30,7 +34,7 @@ type Filters = {
   search: string;
 };
 
-const currentMonth = new Date().toISOString().slice(0, 7);
+const currentMonth = currentIsoMonth();
 
 const copy = {
   en: {
@@ -126,7 +130,7 @@ export default function CollectionsPage() {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [overview, setOverview] = useState<CollectionOverview | null>(null);
-  const [todayIso, setTodayIso] = useState(new Date().toISOString().slice(0, 10));
+  const [todayIso, setTodayIso] = useState(currentIsoDate());
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [operationId, setOperationId] = useState('');
@@ -136,7 +140,7 @@ export default function CollectionsPage() {
   const [landlordDraft, setLandlordDraft] = useState('');
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
-    paymentDate: new Date().toISOString().slice(0, 10),
+    paymentDate: formatNexoraDate(currentIsoDate()),
     paymentMethod: 'bank_transfer',
     transactionType: 'payment',
     paymentReference: '',
@@ -170,6 +174,7 @@ export default function CollectionsPage() {
 
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
+    window.dispatchEvent(new CustomEvent('nexora-language-change', { detail: language }));
   }, [language]);
 
   useEffect(() => {
@@ -208,6 +213,12 @@ export default function CollectionsPage() {
     }));
   }, [selectedRow, reminderLanguage, todayIso]);
 
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   async function loadOverview() {
     setLoading(true);
     setNotice(null);
@@ -224,6 +235,13 @@ export default function CollectionsPage() {
       setLoading(false);
     }
   }
+
+  const upcomingDue7Days = useMemo(() => {
+    const target = new Date(`${todayIso}T00:00:00Z`);
+    target.setUTCDate(target.getUTCDate() + 7);
+    const targetIso = target.toISOString().slice(0, 10);
+    return rows.filter((r) => r.collection.dueDate >= todayIso && r.collection.dueDate <= targetIso && r.outstanding > 0).length;
+  }, [rows, todayIso]);
 
   const filteredRows = useMemo(() => {
     const query = filters.search.trim().toLowerCase();
@@ -242,8 +260,11 @@ export default function CollectionsPage() {
       if (filters.status !== 'all' && row.status !== filters.status) return false;
       if (filters.overdue === 'overdue' && row.status !== 'overdue' && row.status !== 'partial') return false;
       if (filters.provider !== 'all' && !row.accounts.some((account) => account.provider === filters.provider)) return false;
-      if (filters.dueFrom && row.collection.dueDate < filters.dueFrom) return false;
-      if (filters.dueTo && row.collection.dueDate > filters.dueTo) return false;
+      const dueDate = normalizeDateForStorage(row.collection.dueDate);
+      const dueFrom = normalizeDateForStorage(filters.dueFrom);
+      const dueTo = normalizeDateForStorage(filters.dueTo);
+      if (dueFrom && (!dueDate || dueDate < dueFrom)) return false;
+      if (dueTo && (!dueDate || dueDate > dueTo)) return false;
       if (filters.assignedAgent && !row.tenancy.assignedAgent.toLowerCase().includes(filters.assignedAgent.toLowerCase())) return false;
       if (query && !haystack.includes(query)) return false;
       return true;
@@ -383,22 +404,16 @@ export default function CollectionsPage() {
     <main className="command-shell collections-shell">
       <header className="command-header">
         <div>
-          <p className="eyebrow">NEXORA / Sprint 003</p>
+          <p className="eyebrow">NEXORA / Sprint 004</p>
           <h1>{t.title}</h1>
           <p className="header-copy">{t.subtitle}</p>
         </div>
-        <div className="header-actions">
+        <AppNav activePage="collections">
           <div className="language-toggle">
             <button className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
             <button className={language === 'zh' ? 'active' : ''} onClick={() => setLanguage('zh')}>中文</button>
           </div>
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button" href="/">{t.navRental}</a>
-            <a className="ghost-button" href="/documents">{t.navDocuments}</a>
-            <a className="ghost-button active" href="/collections">{t.title}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-          </nav>
-        </div>
+        </AppNav>
       </header>
 
       {notice && <div className={`notice ${notice.tone}`}>{notice.message}</div>}
@@ -435,12 +450,21 @@ export default function CollectionsPage() {
           ) : (
             <>
               {activeView === 'dashboard' && (
-                <section className="workspace-grid bottom-grid">
-                  <div className="panel">
-                    <div className="section-title"><div><p className="eyebrow">{t.title}</p><h2>{formatDisplayMonth(filters.month)}</h2></div></div>
-                    <CollectionList rows={filteredRows} language={language} selectedId={selectedRow?.collection.id ?? ''} onSelect={setSelectedCollectionId} emptyText={t.noResults} />
+                <section className="panel bottom-grid">
+                  <div className="section-title">
+                    <div>
+                      <p className="eyebrow">{t.title}</p>
+                      <h2>{formatDisplayMonth(filters.month)} &mdash; {filteredRows.length} {language === 'zh' ? '条记录' : 'records'}</h2>
+                    </div>
                   </div>
-                  {selectedRow && <DetailPanel row={selectedRow} language={language} />}
+                  <CollectionTable
+                    rows={filteredRows}
+                    language={language}
+                    selectedId={selectedRow?.collection.id ?? ''}
+                    onSelect={setSelectedCollectionId}
+                    onAction={(id, action) => { setSelectedCollectionId(id); setActiveView(action); }}
+                    emptyText={t.noResults}
+                  />
                 </section>
               )}
 
@@ -470,6 +494,7 @@ export default function CollectionsPage() {
         <Metric label={t.collected} value={formatMYR(metrics.collectedThisMonth)} tone="success" />
         <Metric label={t.outstanding} value={formatMYR(metrics.outstandingThisMonth)} tone={metrics.outstandingThisMonth ? 'danger' : 'success'} />
         <Metric label={t.overdueAmount} value={formatMYR(metrics.overdueAmount)} tone={metrics.overdueAmount ? 'danger' : undefined} />
+        <Metric label={language === 'zh' ? '7天内到期' : 'Due in 7 Days'} value={String(upcomingDue7Days)} tone={upcomingDue7Days ? 'danger' : undefined} />
         <Metric label={t.dueToday} value={String(metrics.dueToday)} />
         <Metric label={t.dueSoon} value={String(metrics.dueWithin3Days)} />
         <Metric label={t.overdueTenancies} value={String(metrics.overdueTenancies)} tone={metrics.overdueTenancies ? 'danger' : undefined} />
@@ -510,8 +535,8 @@ function FiltersPanel({ filters, language, onChange }: { filters: Filters; langu
       <SelectField label={language === 'zh' ? '付款状态' : 'Payment status'} value={filters.status} options={['all', 'pending', 'due', 'paid', 'partial', 'outstanding', 'overdue', 'waived', 'disputed']} onChange={(value) => onChange({ ...filters, status: value })} />
       <SelectField label={language === 'zh' ? '逾期状态' : 'Overdue status'} value={filters.overdue} options={['all', 'overdue']} onChange={(value) => onChange({ ...filters, overdue: value })} />
       <SelectField label={language === 'zh' ? '水电供应商' : 'Utility provider'} value={filters.provider} options={['all', 'tnb', 'water', 'iwk', 'wifi', 'aircond', 'other']} onChange={(value) => onChange({ ...filters, provider: value })} />
-      <Field label={language === 'zh' ? '到期日起' : 'Due from'} value={filters.dueFrom} onChange={(value) => onChange({ ...filters, dueFrom: value })} />
-      <Field label={language === 'zh' ? '到期日至' : 'Due to'} value={filters.dueTo} onChange={(value) => onChange({ ...filters, dueTo: value })} />
+        <DateField label={language === 'zh' ? '到期日起' : 'Due from'} value={filters.dueFrom} onChange={(value) => onChange({ ...filters, dueFrom: value })} />
+        <DateField label={language === 'zh' ? '到期日至' : 'Due to'} value={filters.dueTo} onChange={(value) => onChange({ ...filters, dueTo: value })} />
       <Field label={language === 'zh' ? '负责中介' : 'Assigned agent'} value={filters.assignedAgent} onChange={(value) => onChange({ ...filters, assignedAgent: value })} />
       <Field label={language === 'zh' ? '搜索' : 'Search'} value={filters.search} onChange={(value) => onChange({ ...filters, search: value })} wide />
     </div>
@@ -553,6 +578,17 @@ function FollowupQueue({ rows, language, onSelect }: { rows: CollectionOverviewR
               <button onClick={() => onSelect(row, 'snoozed')}>{language === 'zh' ? '延后' : 'Snooze'}</button>
               <button onClick={() => onSelect(row, 'promise_to_pay')}>{language === 'zh' ? '承诺付款' : 'Promise to pay'}</button>
               <button onClick={() => onSelect(row, 'escalated')}>{language === 'zh' ? '升级处理' : 'Escalate'}</button>
+              <WhatsAppActions
+                contact={{ name: row.tenancy.tenant, role: 'tenant', represents: 'tenant', phone: row.tenancy.tenantPhone }}
+                tenancyId={row.tenancy.id}
+                defaultTemplateType={row.outstanding > 0 ? 'rental_overdue' : 'general_follow_up'}
+                variables={{
+                  tenant_name: row.tenancy.tenant, property_name: row.tenancy.property, unit_number: row.tenancy.unitNo,
+                  monthly_rental: row.tenancy.monthlyRental, amount_due: row.outstanding, outstanding_amount: row.outstanding,
+                  due_date: row.collection.dueDate, agent_name: row.tenancy.assignedAgent
+                }}
+                uiLanguage={language}
+              />
             </div>
           </article>
         ))}
@@ -613,7 +649,7 @@ function PaymentPanel({ language, selectedRow, form, setForm, onSave, busy }: { 
       <div className="section-title"><div><p className="eyebrow">{language === 'zh' ? '记录付款' : 'Payment Recording'}</p><h2>{selectedRow.tenancy.tenant}</h2></div></div>
       <div className="form-grid">
         <Field label={language === 'zh' ? '金额' : 'Amount'} value={form.amount} onChange={(value) => setForm({ ...form, amount: value })} />
-        <Field label={language === 'zh' ? '付款日期' : 'Payment date'} value={form.paymentDate} onChange={(value) => setForm({ ...form, paymentDate: value })} />
+        <DateField label={language === 'zh' ? '付款日期' : 'Payment date'} value={form.paymentDate} onChange={(value) => setForm({ ...form, paymentDate: value })} />
         <SelectField label={language === 'zh' ? '付款方式' : 'Payment method'} value={form.paymentMethod} options={['bank_transfer', 'cash', 'duitnow', 'touch_n_go', 'cheque', 'online_banking', 'other']} onChange={(value) => setForm({ ...form, paymentMethod: value })} />
         <SelectField label={language === 'zh' ? '交易类型' : 'Transaction type'} value={form.transactionType} options={['payment', 'adjustment', 'waiver', 'refund', 'reversal']} onChange={(value) => setForm({ ...form, transactionType: value })} />
         <Field label={language === 'zh' ? '银行参考' : 'Bank reference'} value={form.paymentReference} onChange={(value) => setForm({ ...form, paymentReference: value })} />
@@ -681,12 +717,98 @@ function Field({ label, value, onChange, wide = false }: { label: string; value:
   return <label className={wide ? 'wide field' : 'field'}><span>{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
+function DateField({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) {
+  return <label className={wide ? 'wide field' : 'field'}><span>{label}</span><DateInput value={value} onValueChange={onChange} /></label>;
+}
+
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
   return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option} key={option}>{option}</option>)}</select></label>;
 }
 
 function Memory({ label, value }: { label: string; value: string }) {
   return <div className="memory-item"><span>{label}</span><p>{value || '-'}</p></div>;
+}
+
+type CollectionTableAction = 'payment' | 'reminder' | 'detail';
+
+function CollectionTable({ rows, language, selectedId, onSelect, onAction, emptyText }: {
+  rows: CollectionOverviewRow[];
+  language: UiLanguage;
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onAction: (id: string, action: CollectionTableAction) => void;
+  emptyText: string;
+}) {
+  if (rows.length === 0) return <EmptyState title={emptyText} body={language === 'zh' ? '调整筛选条件后重试。' : 'Adjust filters and try again.'} />;
+  const zh = language === 'zh';
+  return (
+    <div className="collection-table-wrap">
+      <table className="collection-data-table">
+        <thead>
+          <tr>
+            <th>{zh ? '租客' : 'Tenant'}</th>
+            <th>{zh ? '房产' : 'Property'}</th>
+            <th>{zh ? '单位' : 'Unit'}</th>
+            <th>{zh ? '月租' : 'Monthly Rental'}</th>
+            <th>TNB</th>
+            <th>{zh ? '水费' : 'Water'}</th>
+            <th>IWK</th>
+            <th>WiFi</th>
+            <th>{zh ? '空调' : 'Air Con'}</th>
+            <th>{zh ? '其他' : 'Other'}</th>
+            <th>{zh ? '应收' : 'Total Due'}</th>
+            <th>{zh ? '已付' : 'Amount Paid'}</th>
+            <th>{zh ? '未结' : 'Outstanding'}</th>
+            <th>{zh ? '到期日' : 'Due Date'}</th>
+            <th>{zh ? '付款日' : 'Paid Date'}</th>
+            <th>{zh ? '付款方式' : 'Method'}</th>
+            <th>{zh ? '收据号' : 'Receipt No'}</th>
+            <th>{zh ? '备注' : 'Remarks'}</th>
+            <th>{zh ? '状态' : 'Status'}</th>
+            <th>{zh ? '操作' : 'Actions'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const { collection, tenancy } = row;
+            const lastPayment = [...collection.paymentLedger].sort((a, b) => (a.paymentDate > b.paymentDate ? -1 : 1)).at(0);
+            const waPhone = tenancy.tenantPhone.replace(/[^0-9+]/g, '');
+            const isActive = selectedId === collection.id;
+            return (
+              <tr key={collection.id} className={isActive ? 'is-active' : ''} onClick={() => onSelect(collection.id)}>
+                <td>{tenancy.tenant || '-'}</td>
+                <td>{tenancy.property || '-'}</td>
+                <td>{tenancy.unitNo || '-'}</td>
+                <td className="cdt-num">{formatMYR(tenancy.monthlyRental)}</td>
+                <td className="cdt-num">{collection.tnbAmount ? formatMYR(collection.tnbAmount) : '-'}</td>
+                <td className="cdt-num">{collection.waterAmount ? formatMYR(collection.waterAmount) : '-'}</td>
+                <td className="cdt-num">{collection.iwkAmount ? formatMYR(collection.iwkAmount) : '-'}</td>
+                <td className="cdt-num">{collection.wifiAmount ? formatMYR(collection.wifiAmount) : '-'}</td>
+                <td className="cdt-num">{collection.aircondAmount ? formatMYR(collection.aircondAmount) : '-'}</td>
+                <td className="cdt-num">{collection.otherCharges ? formatMYR(collection.otherCharges) : '-'}</td>
+                <td className="cdt-num cdt-bold">{formatMYR(row.total)}</td>
+                <td className="cdt-num cdt-success">{formatMYR(row.paid)}</td>
+                <td className={`cdt-num ${row.outstanding > 0 ? 'cdt-danger' : 'cdt-success'}`}>{formatMYR(row.outstanding)}</td>
+                <td>{formatDisplayDate(collection.dueDate)}</td>
+                <td>{lastPayment?.paymentDate ? formatDisplayDate(lastPayment.paymentDate) : '-'}</td>
+                <td>{lastPayment?.paymentMethod ? lastPayment.paymentMethod.replace('_', ' ') : '-'}</td>
+                <td>{lastPayment?.receiptNumber || '-'}</td>
+                <td style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{collection.notes || '-'}</td>
+                <td><span className={`status-pill ${row.status}`}>{row.status}</span></td>
+                <td className="cdt-actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="action-chip" onClick={() => onAction(collection.id, 'detail')}>{zh ? '查看' : 'View'}</button>
+                  <button className="action-chip action-chip--pay" onClick={() => onAction(collection.id, 'payment')}>{zh ? '付款' : 'Pay'}</button>
+                  {waPhone && (
+                    <a className="action-chip action-chip--wa" href={`https://wa.me/${waPhone}`} target="_blank" rel="noreferrer">WA</a>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {

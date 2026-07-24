@@ -36,7 +36,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const textResult = await extractDocumentText({ buffer, mimeType: document.data.mime_type, filename: document.data.original_filename });
     const success = textResult.status === 'completed' && Boolean(textResult.text.trim());
     const extractedJson = document.data.document_type === 'tenancy_agreement' && success
-      ? await extractTenancyDetails(textResult.text, document.data.original_filename, document.data.mime_type)
+      ? await extractTenancyDetails(textResult.text, document.data.original_filename, document.data.mime_type, {
+        maxOutputTokens: 16_000, timeoutMs: 90_000, retryTimeoutMs: 60_000, maxAttempts: 2
+      })
       : document.data.document_type === 'utility_bill' && success
         ? extractUtilityBill(textResult.text, document.data.original_filename)
         : {};

@@ -6,6 +6,9 @@ import {
   ArrowLeft, BarChart3, Building2, Calculator, CircleDollarSign, Database, Languages,
   LayoutDashboard, Map, MapPin, Menu, Plus, RefreshCw, Search, Sparkles, Trash2, X
 } from 'lucide-react';
+import { DateInput } from '../../lib/dates/DateInput';
+import { formatNexoraDate } from '../../lib/dates/formatDate';
+import { formatMYR } from '../../lib/formatters';
 
 export type PropertyIntelligenceView = 'intelligence' | 'analysis' | 'comparables' | 'nearby' | 'score' | 'map';
 type Row = Record<string, unknown> & { id: string };
@@ -111,7 +114,7 @@ export default function PropertyIntelligenceWorkspace({ view }: { view: Property
     <aside className={`pi-sidebar ${menuOpen ? 'open' : ''}`}>
       <div className="pi-brand"><span>NX</span><div><strong>Nexora AI</strong><small>Property Intelligence</small></div><button className="pi-close" onClick={() => setMenuOpen(false)} aria-label="Close navigation"><X size={18}/></button></div>
       <nav>{navigation.map((item) => <Link key={item.view} href={item.href} className={item.view === view ? 'active' : ''} onClick={() => setMenuOpen(false)}><item.icon size={17}/><span>{item.label}<small>{item.zh}</small></span></Link>)}</nav>
-      <Link className="pi-back" href="/commercial"><ArrowLeft size={16}/> Commercial CRM</Link>
+      <Link className="pi-back" href="/home"><ArrowLeft size={16}/>{language === 'zh' ? '返回首页' : 'Back to Home'}</Link>
     </aside>
     <main className="pi-main">
       <header className="pi-header">
@@ -157,7 +160,21 @@ function Analysis({ analysis, language, save, run, busy }: { analysis: Row; lang
 }
 
 function Comparables({ rows, submit, remove, busy }: { rows: Row[]; submit: (event: FormEvent<HTMLFormElement>) => void; remove: (id: string) => void; busy: boolean }) {
-  return <div className="pi-data-layout"><form className="pi-panel pi-entry-form" onSubmit={submit}><header><div><p>SOURCE-ATTRIBUTED</p><h2>Add comparable</h2></div></header><label><span>Type</span><select name="comparable_type"><option value="sale">Sale</option><option value="rental">Rental</option></select></label><label><span>Property name</span><input name="property_name" required/></label><label><span>Price</span><input name="price" type="number" min="0" step=".01"/></label><label><span>Monthly rental</span><input name="rental" type="number" min="0" step=".01"/></label><label><span>Built-up (sq ft)</span><input name="built_up_sqft" type="number" min="0" step=".01"/></label><label><span>Transaction date</span><input name="transaction_date" type="date"/></label><label><span>Source name</span><input name="source_name" required placeholder="Registry, portal or valuer"/></label><label><span>Source reference</span><input name="source_reference"/></label><button className="pi-primary" disabled={busy}><Plus size={16}/> Add comparable</button></form><section className="pi-panel pi-table-panel"><header><div><p>COMPARABLE SALES & RENTALS</p><h2>{rows.length} evidence record{rows.length === 1 ? '' : 's'}</h2></div></header>{rows.length ? <div className="pi-table-wrap"><table><thead><tr><th>Property</th><th>Type</th><th>Price / rental</th><th>PSF</th><th>Distance</th><th>Source</th><th></th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{String(row.property_name)}</strong><small>{String(row.transaction_date ?? 'Date not supplied')}</small></td><td>{String(row.comparable_type)}</td><td>{money(row.comparable_type === 'sale' ? row.price : row.rental)}</td><td>{row.psf ? money(row.psf) : '-'}</td><td>{row.distance_km ? `${row.distance_km} km` : '-'}</td><td>{String(row.source_name)}</td><td><button onClick={() => remove(row.id)} title="Delete comparable"><Trash2 size={15}/></button></td></tr>)}</tbody></table></div> : <PanelEmpty text="Add verified sale or rental evidence. Nexora will not create synthetic comparables."/>}</section></div>;
+  return <div className="pi-data-layout">
+    <form className="pi-panel pi-entry-form" onSubmit={submit}>
+      <header><div><p>SOURCE-ATTRIBUTED</p><h2>Add comparable</h2></div></header>
+      <label><span>Type</span><select name="comparable_type"><option value="sale">Sale</option><option value="rental">Rental</option></select></label>
+      <label><span>Property name</span><input name="property_name" required /></label>
+      <label><span>Price</span><input name="price" type="number" min="0" step=".01" /></label>
+      <label><span>Monthly rental</span><input name="rental" type="number" min="0" step=".01" /></label>
+      <label><span>Built-up (sq ft)</span><input name="built_up_sqft" type="number" min="0" step=".01" /></label>
+      <label><span>Transaction date</span><DateInput name="transaction_date" /></label>
+      <label><span>Source name</span><input name="source_name" required placeholder="Registry, portal or valuer" /></label>
+      <label><span>Source reference</span><input name="source_reference" /></label>
+      <button className="pi-primary" disabled={busy}><Plus size={16} /> Add comparable</button>
+    </form>
+    <section className="pi-panel pi-table-panel"><header><div><p>COMPARABLE SALES & RENTALS</p><h2>{rows.length} evidence record{rows.length === 1 ? '' : 's'}</h2></div></header>{rows.length ? <div className="pi-table-wrap"><table><thead><tr><th>Property</th><th>Type</th><th>Price / rental</th><th>PSF</th><th>Distance</th><th>Source</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{String(row.property_name)}</strong><small>{formatNexoraDate(row.transaction_date, 'Date not supplied')}</small></td><td>{String(row.comparable_type)}</td><td>{money(row.comparable_type === 'sale' ? row.price : row.rental)}</td><td>{row.psf ? money(row.psf) : '-'}</td><td>{row.distance_km ? `${row.distance_km} km` : '-'}</td><td>{String(row.source_name)}</td><td><button onClick={() => remove(row.id)} title="Delete comparable"><Trash2 size={15} /></button></td></tr>)}</tbody></table></div> : <PanelEmpty text="Add verified sale or rental evidence. Nexora will not create synthetic comparables." />}</section>
+  </div>;
 }
 
 function Nearby({ rows, submit, remove, busy }: { rows: Row[]; submit: (event: FormEvent<HTMLFormElement>) => void; remove: (id: string) => void; busy: boolean }) {
@@ -187,7 +204,7 @@ function Narrative({ title, value }: { title: string; value: unknown }) { return
 async function api(url: string, init?: RequestInit) { const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } }); const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || 'request-failed'); return data; }
 function message(error: unknown) { const code = error instanceof Error ? error.message : 'request-failed'; return ({ 'tables-missing': 'Sprint 007 database migration has not been applied.', 'database-unavailable': 'The database is unavailable.', 'duplicate-record': 'An analysis or source reference already exists.', 'permission-denied': 'You do not have permission for this action.', 'property-source-not-found': 'The source property is unavailable or restricted.' } as Record<string,string>)[code] ?? 'The property intelligence request could not be completed.'; }
 function nullableNumber(value: FormDataEntryValue | unknown) { if (value === '' || value === null || value === undefined) return null; const number = Number(value); return Number.isFinite(number) ? number : null; }
-function money(value: unknown) { if (value === null || value === undefined || value === '') return '-'; return new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR', maximumFractionDigits: 0 }).format(Number(value)); }
+function money(value: unknown) { return formatMYR(value, '-'); }
 function percent(value: unknown) { return value === null || value === undefined || value === '' ? '-' : `${Number(value).toFixed(1)}%`; }
 function array(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }
 function mapBounds(points: Array<{ latitude: number; longitude: number }>) { const latitudes = points.map((p) => p.latitude), longitudes = points.map((p) => p.longitude); return { minLat: Math.min(...latitudes), maxLat: Math.max(...latitudes), minLng: Math.min(...longitudes), maxLng: Math.max(...longitudes) }; }

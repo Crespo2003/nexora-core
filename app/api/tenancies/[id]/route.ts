@@ -4,6 +4,8 @@ import { sortTimeline, titleForActivity } from '../../../../lib/tenancy-workspac
 import type { DocumentRecord, TimelineEvent } from '../../../../lib/tenancy-workspace/types';
 import { buildWorkspaceWarnings, tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
 import { getApiErrorMessage, requireWorkspaceAccess } from '../../../../lib/supabase/server';
+import { currentIsoDate, normalizeDateForStorage } from '../../../../lib/dates/formatDate';
+import { reconcileDocumentLinkedStatus } from '../../../../lib/documents/reconcile';
 
 const editableTenancyFields = new Set([
   'tenant', 'tenant_id_no', 'tenant_phone', 'tenant_email', 'tenant_nationality',
@@ -15,6 +17,7 @@ const editableTenancyFields = new Set([
   'car_park_remote_deposit', 'rental_due_day', 'expiry_date', 'renewal_reminder', 'renewal_option',
   'notice_period', 'special_clauses', 'notes', 'status'
 ]);
+const editableDateFields = new Set(['tenant_identity_expiry', 'move_in_date', 'insurance_expiry', 'commencement_date', 'expiry_date', 'renewal_reminder']);
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   try {
@@ -101,10 +104,11 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     const currentCollection = collections[0] ?? null;
     const documentTypes = new Set(documents.map((document) => document.document_type));
     const expectedDocumentTypes = ['tenancy_agreement', 'identity_document', 'inventory_list'];
-    const today = new Date();
-    const expiryDays = Math.ceil((Date.parse(`${String(tenancyResult.data.expiry_date)}T00:00:00Z`) - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / 86_400_000);
+    const todayIso = currentIsoDate();
+    const startOfToday = Date.parse(`${todayIso}T00:00:00Z`);
+    const expiryDays = Math.ceil((Date.parse(`${String(tenancyResult.data.expiry_date)}T00:00:00Z`) - startOfToday) / 86_400_000);
     const reminderDays = tenancyResult.data.renewal_reminder
-      ? Math.ceil((Date.parse(`${String(tenancyResult.data.renewal_reminder)}T00:00:00Z`) - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / 86_400_000)
+      ? Math.ceil((Date.parse(`${String(tenancyResult.data.renewal_reminder)}T00:00:00Z`) - startOfToday) / 86_400_000)
       : Number.POSITIVE_INFINITY;
     const dashboard = {
       rentalDue: Number(currentCollection?.rental_amount ?? tenancyResult.data.monthly_rental ?? 0),
@@ -286,9 +290,13 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       });
     }
 
-    const changes = Object.fromEntries(
-      Object.entries(payload.changes ?? {}).filter(([key]) => editableTenancyFields.has(key))
-    );
+    const changes = Object.fromEntries(Object.entries(payload.changes ?? {}).flatMap(([key, value]) => {
+      if (!editableTenancyFields.has(key)) return [];
+      if (!editableDateFields.has(key)) return [[key, value]];
+      if (value === null || value === '') return [[key, null]];
+      const normalized = normalizeDateForStorage(value);
+      return normalized ? [[key, normalized]] : [];
+    }));
     if (!Object.keys(changes).length) {
       return NextResponse.json({ error: 'no-valid-fields' }, { status: 400 });
     }
@@ -322,9 +330,45 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
   try {
     const auth = await requireWorkspaceAccess(['owner', 'admin'], request);
     if (auth instanceof Response) return auth;
-    const { supabase } = auth;
+    const { supabase, workspaceId } = auth;
+
+    // Capture linked document IDs BEFORE deletion because:
+    //   • tenancy_documents.tenancy_id will be SET NULL by the FK rule after deletion
+    //   • document_links.entity_id has no FK and persists as an orphan after deletion
+    const dlLinks = await supabase
+      .from('document_links')
+      .select('document_id')
+      .eq('entity_type', 'tenancy')
+      .eq('entity_id', params.id);
+    const tdLinks = await supabase
+      .from('tenancy_documents')
+      .select('storage_path')
+      .eq('tenancy_id', params.id)
+      .eq('workspace_id', workspaceId);
+
     const { error } = await supabase.from('tenancies').delete().eq('id', params.id);
     if (error) throw error;
+
+    // Reconcile affected documents: deletes stale document_links and syncs linked_status.
+    // Best-effort — failure here does not roll back the successful tenancy deletion.
+    const affectedDocIds = new Set<string>();
+    for (const row of (dlLinks.data ?? []) as Array<{ document_id: string }>) {
+      affectedDocIds.add(row.document_id);
+    }
+    if (tdLinks.data?.length) {
+      const paths = (tdLinks.data as Array<{ storage_path: string }>).map((r) => r.storage_path);
+      const docsAtPaths = await supabase
+        .from('documents')
+        .select('id')
+        .in('storage_path', paths)
+        .eq('workspace_id', workspaceId);
+      for (const row of (docsAtPaths.data ?? []) as Array<{ id: string }>) {
+        affectedDocIds.add(row.id);
+      }
+    }
+    if (affectedDocIds.size > 0) {
+      await reconcileDocumentLinkedStatus(supabase, workspaceId, [...affectedDocIds]);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

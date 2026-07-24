@@ -1,5 +1,5 @@
-import { displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
-import { applyRiskEngine, type TenancyLegalIntelligence } from '../ai/extractTenancy';
+import { currentIsoDate, displayDateToIso, isoToDisplayDate } from '../dates/formatDate';
+import { applyRiskEngine, enrichExtractedTenancyTerms, type TenancyLegalIntelligence } from '../ai/extractTenancy';
 import type { Confidence, ExtractedField, TenancyExtraction, TenancyExtractionFallbackReason } from './parser';
 
 const empty = (): ExtractedField => ({ value: '', confidence: 'low' });
@@ -35,8 +35,8 @@ export function extractTenancyDeterministically(
   };
 
   const property = {
-    propertyName: first([/property(?: name)?\s*[:\-]\s*([^\n]+)/i, /premises\s*[:\-]\s*([^\n]+)/i]),
-    unitNo: first([/unit(?: no\.?| number)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /parcel(?: no\.?)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i]),
+    propertyName: first([/property(?: name)?\s*[:\-]\s*([^\n]+)/i, /premises\s*[:\-]\s*([^\n]+)/i, /\bunit\s+[A-Za-z0-9][A-Za-z0-9\-\/]*\s*,\s*([^,\n]+)/i]),
+    unitNo: first([/unit(?: no\.?| number)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /parcel(?: no\.?)?\s*[:\-]\s*([A-Z0-9\-\/]+)/i, /\bunit\s+([A-Z0-9][A-Z0-9\-\/]{1,})/i]),
     fullAddress: first([/(?:address|premises address)\s*[:\-]\s*([^\n]+(?:\n[^\n]+){0,2})/i]),
     propertyType: first([/(residential|commercial|industrial|office|retail|bungalow|embassy|factory|warehouse|shoplot|condominium|apartment)/i], 'low')
   };
@@ -50,8 +50,8 @@ export function extractTenancyDeterministically(
     carParkRemoteDeposit: money([/(?:car park|parking)(?: remote| card)? deposit\s*[:\-]?\s*(RM\s*[\d,]+(?:\.\d{2})?)/i])
   };
   const dates = {
-    commencementDate: date([/(?:commencement date|start date)\s*[:\-]\s*([^\n]+)/i]),
-    expiryDate: date([/(?:expiry date|end date)\s*[:\-]\s*([^\n]+)/i]),
+    commencementDate: date([/(?:commencement date|start date)\s*[:\-]\s*([^\n]+)/i, /commenc(?:ing|ement)\s+(?:on\s+)?(?:the\s+)?(\d[^\n,]{1,25})/i]),
+    expiryDate: date([/(?:expiry date|end date)\s*[:\-]\s*([^\n]+)/i, /expir(?:ing|y)\s+on\s+(?:the\s+)?(\d[^\n,]{1,25})/i]),
     rentalDueDay: first([/(?:rental due day|rent due day)\s*[:\-]?\s*(\d{1,2})/i, /rent(?:al)?\s+(?:is\s+)?payable\s+on\s+the\s+(\d{1,2})(?:st|nd|rd|th)?/i]),
     renewalOption: first([/(renewal option\s*[:\-]\s*[^\n]+)/i, /(option to renew\s*[^\n]+)/i]),
     noticePeriod: first([/(notice period\s*[:\-]\s*[^\n]+)/i, /(\d+\s*(?:month|months|day|days)\s+notice)/i]),
@@ -66,19 +66,20 @@ export function extractTenancyDeterministically(
   const all = [...Object.values(property), ...Object.values(landlord), ...Object.values(tenant), ...Object.values(financial), ...Object.values(dates), ...Object.values(clauses)];
   const detected = all.filter((field) => field.value).length;
   const overall: Confidence = detected >= 8 ? 'high' : detected >= 4 ? 'medium' : 'low';
-  const legalIntelligence = applyRiskEngine(toLegalIntelligence(property, landlord, tenant, financial, dates, clauses, overall), text);
+  const legalIntelligence = applyRiskEngine(enrichExtractedTenancyTerms(toLegalIntelligence(property, landlord, tenant, financial, dates, clauses, overall), text), text);
 
   return {
     property, landlord, tenant, financial, dates, clauses,
     document: {
       originalFilename,
-      uploadDate: isoToDisplayDate(new Date().toISOString().slice(0, 10)),
+      uploadDate: isoToDisplayDate(currentIsoDate()),
       documentType: mimeType.includes('pdf') ? 'PDF Tenancy Agreement' : mimeType.includes('wordprocessing') ? 'DOCX Tenancy Agreement' : 'TXT Tenancy Agreement',
       extractionStatus: text.length >= 80 ? 'ready' : 'unreadable',
       extractionConfidence: overall,
       usedOcr: false,
       pageCount: null,
       chunkCount: 1,
+      aiCallCount: 0,
       model: null,
       fallbackReason
     },
@@ -96,8 +97,9 @@ function partyFields(
   label: string,
   first: (patterns: RegExp[], confidence?: Confidence, accept?: (value: string) => boolean) => ExtractedField
 ) {
+  const reversePattern = new RegExp(`([A-Z]{2,}(?:[ \\t]+[A-Z]{2,}){0,3})[^\\n]{0,200}?hereinafter\\s+called\\s+["']?(?:the\\s+)?(?:${label})`, 'i');
   return {
-    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i')], 'medium', isSafePartyName),
+    name: first([new RegExp(`(?:${label})\\s*[:\\-]\\s*([^\\n]+)`, 'i'), reversePattern], 'medium', isSafePartyName),
     idNo: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:ic|nric|passport|company no\\.?)\\s*[:\\-]\\s*([A-Z0-9\\-]+)`, 'i')]),
     phone: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:phone|tel|contact)\\s*[:\\-]\\s*([+0-9 \\-]+)`, 'i')]),
     email: first([new RegExp(`(?:${label})[\\s\\S]{0,160}?(?:email|e-mail)\\s*[:\\-]\\s*([^\\s\\n]+@[^\\s\\n]+)`, 'i')])
@@ -120,6 +122,12 @@ function normalizeDateField(field: ExtractedField): ExtractedField {
   if (iso) return { value: isoToDisplayDate(iso[1]), confidence: field.confidence };
   const slash = value.match(/(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
   if (slash) return { value: `${slash[1].padStart(2, '0')}/${slash[2].padStart(2, '0')}/${slash[3]}`, confidence: field.confidence };
+  const named = value.match(/(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})/i);
+  if (named) {
+    const monthMap: Record<string, string> = { january: '01', february: '02', march: '03', april: '04', may: '05', june: '06', july: '07', august: '08', september: '09', october: '10', november: '11', december: '12' };
+    const month = monthMap[named[2].toLowerCase()];
+    if (month) return { value: `${named[1].padStart(2, '0')}/${month}/${named[3]}`, confidence: field.confidence };
+  }
   return { value, confidence: 'low' };
 }
 
@@ -129,13 +137,16 @@ function toLegalIntelligence(
 ): TenancyLegalIntelligence {
   const pct = (field: ExtractedField) => field.value ? field.confidence === 'high' ? 90 : field.confidence === 'medium' ? 70 : 40 : 0;
   const iso = (field: ExtractedField) => displayDateToIso(field.value) ?? '';
-  const number = (field: ExtractedField) => Number(field.value) || 0;
+  const number = (field: ExtractedField) => {
+    const value = Number(field.value);
+    return field.value.trim() && Number.isFinite(value) && value >= 0 ? value : null;
+  };
   return {
     document_type: property.propertyType.value, confidence: overall === 'high' ? 0.85 : overall === 'medium' ? 0.65 : 0.35,
     tenant: { name: tenant.name.value, company: '', ic_passport: tenant.idNo.value, phone: tenant.phone.value, email: tenant.email.value },
     landlord: { name: landlord.name.value, company: '', ic_passport: landlord.idNo.value, phone: landlord.phone.value, email: landlord.email.value },
     property: { name: property.propertyName.value, unit: property.unitNo.value, address: property.fullAddress.value, type: property.propertyType.value, build_up: '', land_area: '', car_parks: '' },
-    financial: { monthly_rental: number(financial.monthlyRental), security_deposit: number(financial.securityDeposit), utility_deposit: number(financial.utilityDeposit), access_card_deposit: number(financial.accessCardDeposit), car_park_deposit: number(financial.carParkRemoteDeposit), stamp_duty: 0 },
+    financial: { monthly_rental: number(financial.monthlyRental), security_deposit: number(financial.securityDeposit), utility_deposit: number(financial.utilityDeposit), access_card_deposit: number(financial.accessCardDeposit), car_park_deposit: number(financial.carParkRemoteDeposit), stamp_duty: null },
     tenancy: { commencement_date: iso(dates.commencementDate), expiry_date: iso(dates.expiryDate), renewal_option: dates.renewalOption.value, notice_period: dates.noticePeriod.value, payment_due_day: dates.rentalDueDay.value },
     utilities: { tnb: '', water: '', iwk: '', wifi: '' },
     legal: { signatures: '', witnesses: '', stamp_duty: '', inventory: '', restrictions: clauses.illegalActivityRestriction.value ? [clauses.illegalActivityRestriction.value] : [], late_payment: '', termination: clauses.terminationClause.value, viewing_rights: clauses.viewingClause.value, insurance: '', maintenance: clauses.otherObligations.value, access_card: '', car_park: '' },

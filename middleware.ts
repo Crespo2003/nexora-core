@@ -89,6 +89,17 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     '/',
+    '/home/:path*',
+    '/crm/:path*',
+    '/listings/:path*',
+    '/deals/:path*',
+    '/viewings/:path*',
+    '/legal/:path*',
+    '/contractors/:path*',
+    '/ai-centre/:path*',
+    '/contacts/:path*',
+    '/dashboard/:path*',
+    '/settings/:path*',
     '/documents/:path*',
     '/collections/:path*',
     '/tenancies/:path*',

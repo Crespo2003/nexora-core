@@ -1,13 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import AppNav from './components/AppNav';
 import type { Confidence, TenancyExtraction } from '../lib/ai/tenancyExtractor';
+import type { DepositEvidence } from '../lib/ai/extractTenancy';
 import {
   currentIsoDate,
   currentIsoMonth,
   isoMonthToDisplayMonth,
-  isoToDisplayDate
+  isoToDisplayDate,
+  normalizeDateForStorage
 } from '../lib/dates/formatDate';
+import { DateInput } from '../lib/dates/DateInput';
 import { getDocumentTranslations } from '../lib/i18n/documentTranslations';
 import { defaultLanguage, getTranslations, languageStorageKey, translateKnownMessage, type Language } from '../lib/i18n/translations';
 import { getBrowserSupabaseClient } from '../lib/supabase/browser';
@@ -22,6 +26,16 @@ import {
   type MappedMoney,
   type TenancyMappedForm
 } from '../lib/tenancy/mapTenancyExtractionToForm';
+import { maxTenancyUploadBytes } from '../lib/tenancy/uploadLimits';
+import {
+  canConfirmReviewedImport,
+  parseReviewedDraft,
+  serializeReviewedDraft,
+  tenancyDraftStorageKey,
+  type ExistingTenancyKey
+} from '../lib/tenancy/importReview';
+import { formatMYR, parseMYR } from '../lib/formatters';
+import { normalizePhone } from '../lib/contacts/phone';
 
 type PaymentStatus = 'paid' | 'partial' | 'outstanding' | 'overdue';
 type NoticeTone = 'info' | 'success' | 'error' | 'warning';
@@ -120,17 +134,55 @@ type UploadedDocument = {
 type TenancyForm = TenancyMappedForm;
 type ImportReviewForm = TenancyMappedForm;
 
-const maxUploadBytes = 10 * 1024 * 1024;
 const todayIso = currentIsoDate();
 const currentMonth = currentIsoMonth();
 
-const currency = new Intl.NumberFormat('en-MY', {
-  currency: 'MYR',
-  style: 'currency',
-  maximumFractionDigits: 0
-});
+const currency = { format: (value: unknown) => formatMYR(value) };
 
 const getSupabaseClient = getBrowserSupabaseClient;
+
+type PreparedTenancyUpload = {
+  signedUrl: string;
+  storagePath: string;
+  mimeType: string;
+  fileSize: number;
+};
+
+function uploadToSignedStorage(file: File, upload: PreparedTenancyUpload, onProgress: (progress: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', upload.signedUrl);
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+      let message = 'The file upload could not be completed.';
+      try {
+        const payload = JSON.parse(xhr.responseText) as { message?: unknown; error?: unknown };
+        if (typeof payload.message === 'string') message = payload.message;
+        else if (typeof payload.error === 'string') message = payload.error;
+      } catch {
+        // Keep the safe client-side error if Storage does not return JSON.
+      }
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error('The file upload connection was interrupted.'));
+
+    // Direct browser-to-Storage upload keeps the 50 MB file out of the Next.js request body.
+    const body = new FormData();
+    body.append('cacheControl', '3600');
+    body.append('', file);
+    xhr.send(body);
+  });
+}
 
 function emptyForm(): TenancyForm {
   return {
@@ -192,6 +244,22 @@ function emptyForm(): TenancyForm {
   };
 }
 
+function safeReadDraft(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function clearReviewedDraft(workspaceId: string, documentId: string): void {
+  try {
+    window.localStorage.removeItem(tenancyDraftStorageKey(workspaceId, documentId));
+  } catch {
+    // Nothing further to do if the device blocks storage access.
+  }
+}
+
 function isMissingTableError(error: unknown): boolean {
   if (typeof error !== 'object' || !error) return false;
   const maybeError = error as { code?: string; message?: string };
@@ -246,10 +314,16 @@ function cleanNumber(value: unknown): number {
   return Number.isFinite(number) ? number : 0;
 }
 
+function displayPhone(value: string): string {
+  const normalized = normalizePhone(value);
+  return normalized.display || normalized.normalized || value.trim();
+}
+
 function toPaymentStatus(totalDue: number, amountPaid: number, dueDate: string): PaymentStatus {
   if (amountPaid >= totalDue) return 'paid';
   if (amountPaid > 0) return 'partial';
-  if (new Date(`${dueDate}T00:00:00`) < new Date(`${todayIso}T00:00:00`)) return 'overdue';
+  const dueDateIso = normalizeDateForStorage(dueDate);
+  if (dueDateIso && dueDateIso < todayIso) return 'overdue';
   return 'outstanding';
 }
 
@@ -258,11 +332,11 @@ function mapTenancy(row: Record<string, unknown>): Tenancy {
     id: String(row.id),
     tenant: String(row.tenant ?? ''),
     tenantIdNo: String(row.tenant_id_no ?? ''),
-    tenantPhone: String(row.tenant_phone ?? ''),
+    tenantPhone: displayPhone(String(row.tenant_phone ?? '')),
     tenantEmail: String(row.tenant_email ?? ''),
     landlord: String(row.landlord ?? ''),
     landlordIdNo: String(row.landlord_id_no ?? ''),
-    landlordPhone: String(row.landlord_phone ?? ''),
+    landlordPhone: displayPhone(String(row.landlord_phone ?? '')),
     landlordEmail: String(row.landlord_email ?? ''),
     property: String(row.property ?? ''),
     unitNo: String(row.unit_no ?? ''),
@@ -402,11 +476,11 @@ function tenancyPayload(form: TenancyForm) {
     access_card_deposit: moneyForPersistence(form.accessCardDeposit),
     car_park_remote_deposit: moneyForPersistence(form.carParkRemoteDeposit),
     rental_due_day: Number(form.paymentDueDay) || 1,
-    commencement_date: normalizeDateForInput(form.commencementDate) || null,
-    expiry_date: normalizeDateForInput(form.expiryDate) || null,
+    commencement_date: normalizeDateForStorage(form.commencementDate),
+    expiry_date: normalizeDateForStorage(form.expiryDate),
     renewal_option: form.renewalOption.trim(),
     notice_period: form.noticePeriod.trim(),
-    renewal_reminder: normalizeDateForInput(form.renewalReminder) || null,
+    renewal_reminder: normalizeDateForStorage(form.renewalReminder),
     signed_ta: form.signedTa.trim(),
     renewal_history: form.renewalHistory.trim(),
     special_clauses: form.specialClauses.trim(),
@@ -505,12 +579,12 @@ function validateForm(form: TenancyForm, tenancies: Tenancy[], editingId: string
   });
 
   if (!form.commencementDate) errors.commencementDate = t.errors.dateRequired;
-  else if (!normalizeDateForInput(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
+  else if (!normalizeDateForStorage(form.commencementDate)) errors.commencementDate = t.errors.dateInvalid;
 
   if (!form.expiryDate) errors.expiryDate = t.errors.dateRequired;
-  else if (!normalizeDateForInput(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
+  else if (!normalizeDateForStorage(form.expiryDate)) errors.expiryDate = t.errors.dateInvalid;
 
-  if (form.renewalReminder && !normalizeDateForInput(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
+  if (form.renewalReminder && !normalizeDateForStorage(form.renewalReminder)) errors.renewalReminder = t.errors.dateInvalid;
 
   const termCompare = compareIsoDates(form.expiryDate, form.commencementDate);
   if (termCompare !== null && termCompare <= 0) errors.expiryDate = t.errors.expiryAfterCommencement;
@@ -545,8 +619,8 @@ function reviewedValues(form: TenancyForm): Record<string, string | number> {
 }
 
 function compareIsoDates(left: string, right: string): number | null {
-  const leftIso = normalizeDateForInput(left);
-  const rightIso = normalizeDateForInput(right);
+  const leftIso = normalizeDateForStorage(left);
+  const rightIso = normalizeDateForStorage(right);
   return leftIso && rightIso ? leftIso.localeCompare(rightIso) : null;
 }
 
@@ -575,9 +649,13 @@ export default function RentalCommandCentre() {
   const [reviewForm, setReviewForm] = useState<ImportReviewForm | null>(null);
   const [importErrors, setImportErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [importState, setImportState] = useState<ImportState>('idle');
+  const [importedTenancyId, setImportedTenancyId] = useState('');
   const [importFailedStage, setImportFailedStage] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | null>(null);
   const [documentViewStatus, setDocumentViewStatus] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [tenancyPage, setTenancyPage] = useState(0);
   const userEditedFields = useRef<Set<EditableTenancyFormField>>(new Set());
 
   const selectedTenancy = tenancies.find((tenancy) => tenancy.id === selectedTenancyId) ?? tenancies[0] ?? null;
@@ -589,6 +667,22 @@ export default function RentalCommandCentre() {
   const outstandingBalance = Math.max(totalDue - totalPaid, 0);
   const lateCount = collections.filter((collection) => collection.paymentStatus === 'overdue' || collection.paymentStatus === 'partial').length;
   const depositExposure = tenancies.reduce((sum, tenancy) => sum + tenancy.securityDeposit + tenancy.utilityDeposit + tenancy.accessCardDeposit + tenancy.carParkRemoteDeposit, 0);
+  const existingTenancyKeys: ExistingTenancyKey[] = tenancies.map((tenancy) => ({ tenant: tenancy.tenant, property: tenancy.property, unitNo: tenancy.unitNo }));
+  const filteredTenancies = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return tenancies;
+    return tenancies.filter((tenancy) =>
+      tenancy.tenant.toLowerCase().includes(q) ||
+      tenancy.property.toLowerCase().includes(q) ||
+      tenancy.unitNo.toLowerCase().includes(q) ||
+      tenancy.landlord.toLowerCase().includes(q)
+    );
+  }, [tenancies, searchTerm]);
+  const tenancyPageCount = Math.max(1, Math.ceil(filteredTenancies.length / 10));
+  const safeTenancyPage = Math.min(tenancyPage, tenancyPageCount - 1);
+  const pagedTenancies = filteredTenancies.slice(safeTenancyPage * 10, safeTenancyPage * 10 + 10);
+  const canImportReviewed = reviewForm ? canConfirmReviewedImport(reviewForm, existingTenancyKeys) : false;
+  const importCompleted = importState === 'success' && Boolean(importedTenancyId);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(languageStorageKey);
@@ -597,8 +691,9 @@ export default function RentalCommandCentre() {
 
   useEffect(() => {
     window.localStorage.setItem(languageStorageKey, language);
+    window.dispatchEvent(new CustomEvent('nexora-language-change', { detail: language }));
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
-    setNotice((current) => ({ ...current, message: translateKnownMessage(current.message, language) }));
+    setNotice((current) => current ? ({ ...current, message: translateKnownMessage(current.message, language) }) : current);
     setPaymentError((current) => translateKnownMessage(current, language));
     setFieldErrors((current) => (Object.keys(current).length ? validateForm(form, tenancies, editingTenancyId, language) : current));
     setImportErrors((current) => (reviewForm && Object.keys(current).length ? validateForm(reviewForm, tenancies, null, language) : current));
@@ -608,6 +703,12 @@ export default function RentalCommandCentre() {
     loadRentalData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!notice || notice.tone === 'warning') return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
 
   async function loadRentalData() {
     if (!supabase) return;
@@ -682,7 +783,11 @@ export default function RentalCommandCentre() {
     const errors = validateForm(form, tenancies, editingTenancyId, language);
     if (Object.keys(errors).length) {
       setFieldErrors(errors);
-      setNotice({ tone: 'error', message: Object.values(errors)[0] ?? t.errors.unknown });
+      const errorMessages = Object.values(errors).filter(Boolean) as string[];
+      const message = errorMessages.length > 1
+        ? `${errorMessages.length} ${language === 'zh' ? '个验证错误。' : 'validation errors. '}${errorMessages[0]}`
+        : (errorMessages[0] ?? t.errors.unknown);
+      setNotice({ tone: 'error', message });
       return;
     }
 
@@ -867,7 +972,7 @@ export default function RentalCommandCentre() {
       setNotice({ tone: 'error', message: t.notices.unsupportedFile });
       return;
     }
-    if (importFile.size > maxUploadBytes) {
+    if (importFile.size > maxTenancyUploadBytes) {
       setNotice({ tone: 'error', message: t.notices.fileTooLarge });
       return;
     }
@@ -875,11 +980,45 @@ export default function RentalCommandCentre() {
     setOperationId('parse-import');
     setImportState('uploading');
     setImportFailedStage('');
+    setImportedTenancyId('');
+    setUploadProgress(0);
     try {
-      const body = new FormData();
-      body.append('file', importFile);
-      const response = await fetch('/api/tenancy-import/upload', { method: 'POST', body });
+      const prepareResponse = await fetch('/api/tenancy-import/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'prepare',
+          filename: importFile.name,
+          mimeType: importFile.type,
+          fileSize: importFile.size
+        })
+      });
+      const prepared = await readJsonApiResponse(prepareResponse) as {
+        error?: unknown;
+        stage?: unknown;
+        code?: unknown;
+        upload?: PreparedTenancyUpload;
+      };
+      if (!prepareResponse.ok || !prepared.upload?.signedUrl || !prepared.upload.storagePath) {
+        const stage = typeof prepared.stage === 'string' ? prepared.stage : 'upload';
+        const code = typeof prepared.code === 'string' ? prepared.code : '';
+        const message = apiErrorMessage(prepared.error ?? t.errors.parseFailed, language);
+        throw new Error(code ? `[${stage}:${code}] ${message}` : `[${stage}] ${message}`);
+      }
+
+      await uploadToSignedStorage(importFile, prepared.upload, setUploadProgress);
       setImportState('parsing');
+      const response = await fetch('/api/tenancy-import/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'finalize',
+          filename: importFile.name,
+          mimeType: prepared.upload.mimeType,
+          fileSize: importFile.size,
+          storagePath: prepared.upload.storagePath
+        })
+      });
       const payload = await readJsonApiResponse(response) as {
         error?: unknown;
         stage?: unknown;
@@ -896,11 +1035,14 @@ export default function RentalCommandCentre() {
       }
       setImportState('extracting');
       const parsed = payload.extraction as TenancyExtraction;
+      const documentId = String(payload.documentId ?? '');
       const mapped = mapTenancyExtractionToForm(parsed, {
-        documentId: String(payload.documentId ?? ''),
+        documentId,
         workspaceId
       });
-      const reviewed = mergeMappedFormPreservingEdits(form, mapped, userEditedFields.current);
+      const merged = mergeMappedFormPreservingEdits(form, mapped, userEditedFields.current);
+      const draft = parseReviewedDraft(safeReadDraft(tenancyDraftStorageKey(workspaceId, documentId)));
+      const reviewed = draft ? { ...merged, ...draft } : merged;
       setExtraction(parsed);
       setForm(reviewed);
       setReviewForm(reviewed);
@@ -909,17 +1051,27 @@ export default function RentalCommandCentre() {
       setFieldErrors({});
       setImportErrors({});
       setImportState('review');
-      setNotice({ tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) });
+      setNotice(
+        draft
+          ? { tone: 'info', message: t.notices.draftRestored }
+          : { tone: parsed.fallbackUsed ? 'warning' : 'success', message: extractionProviderMessage(parsed, language) }
+      );
     } catch (error) {
       setImportState('failed');
       setImportFailedStage(t.uploadTenancyAgreement);
       setNotice({ tone: 'error', message: userError(error, language) });
     } finally {
+      setUploadProgress(null);
       setOperationId(null);
     }
   }
 
   async function confirmImport() {
+    if (operationId === 'confirm-import' || importState === 'saving') return;
+    if (importCompleted) {
+      setNotice({ tone: 'info', message: t.notices.importAlreadyCompleted });
+      return;
+    }
     if (!reviewForm || !importFile || !extraction) return;
     if (!uploadedDocument) {
       setNotice({ tone: 'error', message: t.notices.documentUnavailable });
@@ -996,21 +1148,45 @@ export default function RentalCommandCentre() {
       setCollections((current) => [collection, ...current]);
       setDocuments((current) => [savedDocument, ...current]);
       setSelectedTenancyId(savedTenancy.id);
+      // Refresh the Rental Command Centre so the dashboard totals reflect the new record.
       await loadRentalData();
       setSelectedTenancyId(savedTenancy.id);
-      setImportFile(null);
-      setExtraction(null);
-      setReviewForm(null);
-      setUploadedDocument(null);
+      setImportedTenancyId(savedTenancy.id);
+      clearReviewedDraft(workspaceId, form.documentId);
+      // Keep the reviewed panel mounted so it can present the imported success state and Open Tenancy action.
       setImportState('success');
-      resetForm();
-      setNotice({ tone: 'success', message: t.notices.importSaved });
+      setImportErrors({});
+      setNotice({ tone: 'success', message: t.notices.importSuccess });
     } catch (error) {
       setImportState('failed');
       setNotice({ tone: 'error', message: `${t.notices.importFailed} ${failedStage}: ${userError(error, language)}` });
     } finally {
       setOperationId(null);
     }
+  }
+
+  function saveDraft() {
+    if (!reviewForm) return;
+    try {
+      window.localStorage.setItem(tenancyDraftStorageKey(workspaceId, reviewForm.documentId), serializeReviewedDraft(reviewForm));
+    } catch {
+      // A blocked or full localStorage still leaves the reviewed values in memory for this session.
+    }
+    setNotice({ tone: 'success', message: t.notices.draftSaved });
+  }
+
+  function resetImport() {
+    setImportFile(null);
+    setExtraction(null);
+    setReviewForm(null);
+    setUploadedDocument(null);
+    setImportedTenancyId('');
+    setImportErrors({});
+    setImportFailedStage('');
+    setUploadProgress(null);
+    setImportState('idle');
+    userEditedFields.current.clear();
+    resetForm();
   }
 
   async function viewDocument(storagePath: string) {
@@ -1040,16 +1216,10 @@ export default function RentalCommandCentre() {
           <h1>{t.rentalCommandCentre}</h1>
           <p className="header-copy">{t.headerCopy}</p>
         </div>
-        <div className="header-actions">
+        <AppNav activePage="tenancies">
           <LanguageToggle language={language} onChange={setLanguage} />
-          <nav className="top-nav" aria-label="Primary">
-            <a className="ghost-button active" href="/">{t.rentalCommandCentre}</a>
-            <a className="ghost-button" href="/documents">{getDocumentTranslations(language).navDocuments}</a>
-            <a className="ghost-button" href="/collections">{language === 'zh' ? '智能收款中心' : 'Smart Collection Centre'}</a>
-            <a className="ghost-button" href="/commercial">{language === 'zh' ? '商业 CRM' : 'Commercial CRM'}</a>
-          </nav>
           <div className="live-badge" title={t.connectionStatus}>{isSupabaseUnavailable ? t.notices.dbConnect : t.supabaseLive}</div>
-        </div>
+        </AppNav>
       </header>
 
       <section className="metrics-grid" aria-label={t.dashboard}>
@@ -1059,7 +1229,7 @@ export default function RentalCommandCentre() {
         <Metric label={t.latePartial} value={String(lateCount)} tone={lateCount > 0 ? 'danger' : 'success'} />
       </section>
 
-      <div className={`notice ${notice.tone}`} role="status">{notice.message}</div>
+      {notice && <div className={`notice ${notice.tone}`} role="status">{notice.message}</div>}
 
       {isLoading ? (
         <LoadingState title={t.loadingRentalData} body={t.notices.connecting} />
@@ -1078,11 +1248,17 @@ export default function RentalCommandCentre() {
                   aria-label={t.uploadPdfDocx}
                   type="file"
                   accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                  onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) => { setImportFile(event.target.files?.[0] ?? null); setUploadProgress(null); }}
                 />
                 <h3>{t.dropDocument}</h3>
-                <p>{t.supportedFiles}</p>
+                <p>{t.supportedFiles} {language === 'zh' ? '最大 50 MB。' : 'Maximum 50 MB.'}</p>
                 {importFile && <p><strong>{t.selectedFile}:</strong> {importFile.name}</p>}
+                {uploadProgress !== null && (
+                  <div aria-live="polite">
+                    <div className="progress-track"><span style={{ width: `${uploadProgress}%` }} /></div>
+                    <p>{language === 'zh' ? `正在上传：${uploadProgress}%` : `Uploading: ${uploadProgress}%`}</p>
+                  </div>
+                )}
                 <button className="secondary-button" onClick={parseImportFile} disabled={!importFile || operationId === 'parse-import'}>
                   {operationId === 'parse-import' ? t.parsingDocument : t.extractDetails}
                 </button>
@@ -1126,9 +1302,31 @@ export default function RentalCommandCentre() {
                     <pre>{extraction.rawText || t.notDetected}</pre>
                   </details>
                   {importState === 'failed' && <div className="notice error">{t.failedStage}: {importFailedStage || t.importIntoNexora}</div>}
-                  <button className="primary-button" onClick={confirmImport} disabled={!reviewForm || operationId === 'confirm-import'}>
-                    {operationId === 'confirm-import' ? t.importing : t.confirmImport}
-                  </button>
+                  {importCompleted ? (
+                    <div className="import-success" role="status">
+                      <div className="notice success">{t.notices.importSuccess}</div>
+                      <div className="document-meta-grid">
+                        <MemoryItem label={t.extractionStatus} value={t.importedStatus} fallback={t.notDetected} />
+                        <MemoryItem label={t.tenancyReference} value={importedTenancyId} fallback={t.notDetected} />
+                      </div>
+                      <div className="import-actions">
+                        <a className="primary-button" href={`/tenancies/${importedTenancyId}`}>{t.openTenancy}</a>
+                        {uploadedDocument && (
+                          <button className="secondary-button" onClick={() => viewDocument(uploadedDocument.storagePath)}>{t.viewDocument}</button>
+                        )}
+                        <button className="ghost-button" onClick={resetImport}>{t.startNewImport}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="import-actions">
+                      <button className="primary-button" onClick={confirmImport} disabled={!reviewForm || !canImportReviewed || operationId === 'confirm-import'}>
+                        {operationId === 'confirm-import' ? t.importing : t.importIntoNexora}
+                      </button>
+                      <button className="secondary-button" onClick={saveDraft} disabled={!reviewForm || operationId === 'confirm-import'}>
+                        {t.saveAsDraft}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1160,32 +1358,67 @@ export default function RentalCommandCentre() {
               {tenancies.length === 0 ? (
                 <EmptyState title={t.noTenanciesYet} body={t.noTenanciesBody} />
               ) : (
-                <div className="tenancy-list">
-                  {tenancies.map((tenancy) => (
-                    <article className={`tenancy-card ${selectedTenancy?.id === tenancy.id ? 'is-active' : ''}`} key={tenancy.id} onClick={() => setSelectedTenancyId(tenancy.id)}>
-                      <div>
-                        <h3>{tenancy.property} {tenancy.unitNo && `· ${tenancy.unitNo}`}</h3>
-                        <p>{tenancy.tenant} / {tenancy.landlord}</p>
-                        <p>{t.commencementDate}: {isoToDisplayDate(tenancy.commencementDate)} · {t.expiryDate}: {isoToDisplayDate(tenancy.expiryDate)}</p>
-                      </div>
-                      <strong>{currency.format(tenancy.monthlyRental)}</strong>
-                      {pendingDeleteId === tenancy.id ? (
-                        <div className="delete-confirmation">
-                          <p>{t.deleteWarning}</p>
-                          <div className="card-actions danger-actions">
-                            <button onClick={(event) => { event.stopPropagation(); confirmDeleteTenancy(tenancy.id); }}>{operationId === `delete-${tenancy.id}` ? t.deleting : t.confirm}</button>
-                            <button onClick={(event) => { event.stopPropagation(); setPendingDeleteId(null); }}>{t.cancel}</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="card-actions">
-                          <button title={t.edit} onClick={(event) => { event.stopPropagation(); startEdit(tenancy); }}>{t.edit}</button>
-                          <button title={t.deleteTenancy} onClick={(event) => { event.stopPropagation(); setPendingDeleteId(tenancy.id); }}>{t.delete}</button>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
+                <>
+                  <input
+                    type="search"
+                    value={searchTerm}
+                    placeholder={language === 'zh' ? '搜索租约、租客、房产...' : 'Search by tenant, property, unit, landlord...'}
+                    onChange={(e) => { setSearchTerm(e.target.value); setTenancyPage(0); }}
+                    style={{ marginBottom: 12 }}
+                  />
+                  {filteredTenancies.length === 0 && searchTerm.trim() ? (
+                    <EmptyState title={language === 'zh' ? '没有匹配结果' : 'No matches'} body={language === 'zh' ? '请调整搜索关键词。' : 'Adjust your search term and try again.'} />
+                  ) : (
+                    <div className="tenancy-list">
+                      {pagedTenancies.map((tenancy) => {
+                        const expiry = normalizeDateForStorage(tenancy.expiryDate);
+                        const daysToExpiry = expiry ? Math.ceil((new Date(`${expiry}T00:00:00Z`).getTime() - new Date(`${todayIso}T00:00:00Z`).getTime()) / 86400000) : null;
+                        return (
+                          <article className={`tenancy-card ${selectedTenancy?.id === tenancy.id ? 'is-active' : ''}`} key={tenancy.id} onClick={() => setSelectedTenancyId(tenancy.id)}>
+                            <div>
+                              <h3>
+                                {tenancy.property} {tenancy.unitNo && `· ${tenancy.unitNo}`}
+                                {daysToExpiry !== null && daysToExpiry < 0 && (
+                                  <span className="status-pill overdue" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? '已过期' : 'Expired'}</span>
+                                )}
+                                {daysToExpiry !== null && daysToExpiry >= 0 && daysToExpiry <= 30 && (
+                                  <span className="status-pill overdue" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? `${daysToExpiry}天` : `Exp ${daysToExpiry}d`}</span>
+                                )}
+                                {daysToExpiry !== null && daysToExpiry > 30 && daysToExpiry <= 90 && (
+                                  <span className="status-pill partial" style={{ marginLeft: 8, fontSize: 10 }}>{language === 'zh' ? `${daysToExpiry}天` : `Exp ${daysToExpiry}d`}</span>
+                                )}
+                              </h3>
+                              <p>{tenancy.tenant} / {tenancy.landlord}</p>
+                              <p>{t.commencementDate}: {isoToDisplayDate(tenancy.commencementDate)} · {t.expiryDate}: {isoToDisplayDate(tenancy.expiryDate)}</p>
+                            </div>
+                            <strong>{currency.format(tenancy.monthlyRental)}</strong>
+                            {pendingDeleteId === tenancy.id ? (
+                              <div className="delete-confirmation">
+                                <p>{t.deleteWarning}</p>
+                                <div className="card-actions danger-actions">
+                                  <button onClick={(event) => { event.stopPropagation(); confirmDeleteTenancy(tenancy.id); }}>{operationId === `delete-${tenancy.id}` ? t.deleting : t.confirm}</button>
+                                  <button onClick={(event) => { event.stopPropagation(); setPendingDeleteId(null); }}>{t.cancel}</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="card-actions">
+                                <button title={t.edit} onClick={(event) => { event.stopPropagation(); startEdit(tenancy); }}>{t.edit}</button>
+                                <button title={t.deleteTenancy} onClick={(event) => { event.stopPropagation(); setPendingDeleteId(tenancy.id); }}>{t.delete}</button>
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {tenancyPageCount > 1 && (
+                    <div className="tenancy-pagination">
+                      <button className="ghost-button" style={{ marginTop: 0, minWidth: 36 }} onClick={() => setTenancyPage((p) => Math.max(0, p - 1))} disabled={safeTenancyPage === 0}>&#8592;</button>
+                      <span style={{ color: 'var(--muted)', fontSize: 13 }}>{safeTenancyPage + 1} / {tenancyPageCount}</span>
+                      <button className="ghost-button" style={{ marginTop: 0, minWidth: 36 }} onClick={() => setTenancyPage((p) => Math.min(tenancyPageCount - 1, p + 1))} disabled={safeTenancyPage === tenancyPageCount - 1}>&#8594;</button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -1324,7 +1557,7 @@ function TenancyFields({
       <Field type="date" label={t.commencementDate} value={form.commencementDate} error={errors.commencementDate} onChange={(value) => onChange('commencementDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.commencement_date')} language={language} required />
       <Field type="date" label={t.expiryDate} value={form.expiryDate} error={errors.expiryDate} onChange={(value) => onChange('expiryDate', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.expiry_date')} language={language} required />
       <Field type="date" label={t.renewalReminder} value={form.renewalReminder} error={errors.renewalReminder} onChange={(value) => onChange('renewalReminder', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
-      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} />
+      <Field label={t.renewalOption} value={form.renewalOption} error={errors.renewalOption} onChange={(value) => onChange('renewalOption', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.renewal_option')} language={language} wide multiline />
       <Field label={t.noticePeriod} value={form.noticePeriod} error={errors.noticePeriod} onChange={(value) => onChange('noticePeriod', value)} confidence={confidenceFor(fieldConfidence, 'tenancy.notice_period')} language={language} />
       <Field label={t.tenantIdNo} value={form.tenantIdentification} error={errors.tenantIdentification} onChange={(value) => onChange('tenantIdentification', value)} confidence={confidenceFor(fieldConfidence, 'tenant.ic_passport')} language={language} />
       <Field label={t.tenantPhone} value={form.tenantPhone} error={errors.tenantPhone} onChange={(value) => onChange('tenantPhone', value)} confidence={confidenceFor(fieldConfidence, 'tenant.phone')} language={language} />
@@ -1348,6 +1581,22 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
     if (!excerpt) return [];
     return [{ path, page: item.source_page, excerpt, confidence: item.confidence }];
   });
+  const additional = extraction.legalIntelligence;
+  const contacts = additional.contacts ?? [];
+  const presentClauses = Object.entries(additional.clause_coverage ?? {}).filter(([, present]) => present).map(([name]) => name.replaceAll('_', ' '));
+  const payment = additional.payment;
+  const parking = additional.parking;
+  const inventory = additional.inventory;
+  const deposits = additional.deposit_details;
+  const depositFields: Array<[string, DepositEvidence]> = deposits ? [
+    ['Security', deposits.security_deposit], ['Utility', deposits.utility_deposit], ['Access card', deposits.access_card_deposit],
+    ['Car park', deposits.car_park_deposit], ['Key', deposits.key_deposit], ['Renovation', deposits.renovation_deposit],
+    ...deposits.other_deposits.map((item) => [item.label, item] as [string, DepositEvidence])
+  ] : [];
+  const depositEvidence = depositFields.filter(([, item]) => item.amount !== null || item.source_excerpt || item.requires_review).map(([label, item]) =>
+    `${label}: ${item.amount === null ? 'Not found' : formatMYR(item.amount)} (${item.basis}${item.rental_multiple !== null ? `, ${item.rental_multiple} month rental` : ''}${item.calculated_amount !== null ? `, calculated ${formatMYR(item.calculated_amount)}` : ''}${item.requires_review ? ', Requires confirmation' : ''}${item.source_page ? `, page ${item.source_page}` : ''})`
+  );
+  const notice = additional.notice_details;
   return (
     <div className="memory-stack">
       <MemoryItem label="AI provider" value={extraction.provider} fallback={fallback} />
@@ -1366,6 +1615,17 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
           </p>
         )) : <p>{fallback}</p>}
       </details>
+      <details className="raw-text">
+        <summary>Extended tenancy intelligence</summary>
+        <p><strong>Property:</strong> {[additional.property.street, additional.property.postcode, additional.property.city, additional.property.state, additional.property.country].filter(Boolean).join(', ') || fallback}</p>
+        <p><strong>Payment:</strong> {[payment?.method, payment?.bank_name, payment?.account_number, payment?.account_holder, payment?.late_payment_interest, payment?.grace_period].filter(Boolean).join(' · ') || fallback}</p>
+        <p><strong>Parking and access:</strong> {[parking?.bays, parking?.bay_numbers, parking?.access_cards, parking?.remote_controls, parking?.keys].filter(Boolean).join(' · ') || fallback}</p>
+        <p><strong>Inventory:</strong> {inventory?.items?.join(', ') || inventory?.furnished || fallback}</p>
+        <p><strong>Clauses present:</strong> {presentClauses.join(', ') || fallback}</p>
+        <p><strong>Deposits:</strong> {depositEvidence.join(' · ') || fallback}</p>
+        <p><strong>Notice:</strong> {notice?.primary_notice_period ? `${notice.notice_type.replace('_', ' ')}: ${notice.primary_notice_period}${notice.source_page ? ` (page ${notice.source_page})` : ''}` : 'Missing from document'}{notice?.other_notice_periods.length ? ` · Other: ${notice.other_notice_periods.map((item) => `${item.notice_type.replaceAll('_', ' ')} ${item.period}${item.source_page ? ` (page ${item.source_page})` : ''}`).join(', ')}` : ''}</p>
+        <p><strong>Contacts:</strong> {contacts.map((contact) => `${contact.role}: ${contact.name || contact.company}${contact.source_page ? ` (page ${contact.source_page})` : ''}`).join(' · ') || fallback}</p>
+      </details>
     </div>
   );
 }
@@ -1373,7 +1633,7 @@ function ExtractionReviewDetails({ mapped, extraction, fallback }: { mapped: Ten
 function confidenceFor(fieldConfidence: Record<string, number> | undefined, path: string): Confidence | undefined {
   const value = fieldConfidence?.[path];
   if (value === undefined) return undefined;
-  return value >= 80 ? 'high' : value >= 50 ? 'medium' : 'low';
+  return value >= 70 ? 'high' : value >= 40 ? 'medium' : 'low';
 }
 
 function renderReviewRisk(input: unknown): string {
@@ -1392,6 +1652,7 @@ function Field({
   onChange,
   type = 'text',
   wide = false,
+  multiline = false,
   required = false,
   placeholder = '',
   error = '',
@@ -1403,16 +1664,22 @@ function Field({
   onChange: (value: string) => void;
   type?: string;
   wide?: boolean;
+  multiline?: boolean;
   required?: boolean;
   placeholder?: string;
   error?: string;
   confidence?: Confidence;
   language?: Language;
 }) {
+  const confidenceClass = confidence === 'low' ? 'critical-confidence' : confidence === 'medium' ? 'review-confidence' : '';
   return (
-    <label className={wide ? 'wide field' : 'field'}>
+    <label className={`${wide ? 'wide field' : 'field'} ${confidenceClass}`}>
       <span>{label}{required ? ' *' : ''}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      <input type={type} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      {multiline
+        ? <textarea rows={3} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+        : type === 'date'
+        ? <DateInput value={value} required={required} placeholder={placeholder || 'DD/MM/YYYY'} onValueChange={onChange} />
+        : <input type={type} value={value} required={required} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />}
       {error && <em>{error}</em>}
     </label>
   );
@@ -1434,10 +1701,13 @@ function NumberField({
   language: Language;
 }) {
   const t = getTranslations(language);
+  const [focused, setFocused] = useState(false);
+  const editingValue = value === '' ? '' : String(value);
+  const confidenceClass = confidence === 'low' ? 'critical-confidence' : confidence === 'medium' ? 'review-confidence' : '';
   return (
-    <label className="field">
+    <label className={`field ${confidenceClass}`}>
       <span>{label}{confidence && <ConfidencePill confidence={confidence} language={language} />}</span>
-      <input type="number" min="0" placeholder={t.placeholders.amount} value={value} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} />
+      <input type="text" inputMode="decimal" placeholder={t.placeholders.amount} value={focused ? editingValue : formatMYR(value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onChange={(event) => { const amount = parseMYR(event.target.value); onChange(event.target.value === '' ? '' : amount ?? value); }} />
       {error && <em>{error}</em>}
     </label>
   );

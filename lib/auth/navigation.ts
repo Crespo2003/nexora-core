@@ -25,5 +25,5 @@ export function destinationForMemberships(memberships: MembershipDestination[], 
       : '/onboarding/workspace';
   }
   if (active.length > 1) return '/workspace/select';
-  return getSafeNextPath(requestedNext, '/');
+  return getSafeNextPath(requestedNext, '/home');
 }

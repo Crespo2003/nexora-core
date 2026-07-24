@@ -8,6 +8,7 @@ import { allowedDocumentMimeTypes, maxDocumentUploadBytes } from '../../../../li
 import { checkUploadRateLimit } from '../../../../lib/security/uploadRateLimit';
 import { getApiErrorMessage, rejectOversizedRequest, requireWorkspaceAccess } from '../../../../lib/supabase/server';
 import { tenancyChangesFromExtraction } from '../../../../lib/tenancy-workspace/automation';
+import { writeActivity } from '../../../../lib/activity/log';
 
 const storageBucket = 'real-estate-documents';
 
@@ -98,39 +99,68 @@ export async function POST(request: Request) {
     const autoPopulation = tenancyExtraction && tenancyId
       ? tenancyChangesFromExtraction(tenancyExtraction)
       : { changes: {}, lowConfidenceFields: [] as string[] };
-    const bundle = await supabase.rpc('sprint_005_create_document_bundle', {
-      p_workspace_id: workspaceId,
-      p_payload: {
-        tenancyId: tenancyId || null,
-        originalFilename: file.name,
-        sanitizedFilename,
-        storageBucket,
-        storagePath,
-        mimeType,
-        fileSize: file.size,
-        documentType,
-        processingStatus: extractionStatus,
-        documentHash,
-        processingAttempts: textResult.usedOcr ? 1 : 0,
-        processingError: textResult.error,
-        rawText,
-        extractedJson: tenancyExtraction ?? {},
-        confidenceJson: tenancyExtraction ?? { classification },
-        aiSummary: tenancyExtraction?.summary ?? (textResult.error ? 'Document processing requires attention.' : 'Document extracted and awaiting confirmation.'),
-        lowConfidenceFields: autoPopulation.lowConfidenceFields
-      }
+    const aiSummary = tenancyExtraction?.summary ?? (textResult.error ? 'Document processing requires attention.' : 'Document extracted and awaiting confirmation.');
+
+    const docResult = await supabase.from('documents').insert({
+      workspace_id: workspaceId,
+      owner_user_id: user.id,
+      original_filename: file.name,
+      sanitized_filename: sanitizedFilename,
+      storage_bucket: storageBucket,
+      storage_path: storagePath,
+      mime_type: mimeType,
+      file_size: file.size,
+      document_type: documentType,
+      upload_status: 'uploaded',
+      processing_status: extractionStatus,
+      linked_status: tenancyId ? 'linked' : 'unlinked',
+      document_hash: documentHash,
+    }).select().single();
+    if (docResult.error) throw docResult.error;
+    persistedDocumentId = docResult.data.id;
+
+    const extractResult = await supabase.from('document_extractions').insert({
+      document_id: docResult.data.id,
+      workspace_id: workspaceId,
+      extraction_version: 'fallback-v1',
+      raw_text: rawText ?? '',
+      extracted_json: tenancyExtraction ?? {},
+      confidence_json: tenancyExtraction ?? { classification },
+      ai_summary: aiSummary,
+      extraction_status: extractionStatus,
+      extraction_error: textResult.error ?? null,
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    }).select().single();
+    if (extractResult.error) throw extractResult.error;
+
+    if (tenancyId) {
+      await supabase.from('document_links').insert({
+        document_id: docResult.data.id,
+        workspace_id: workspaceId,
+        entity_type: 'tenancy',
+        entity_id: tenancyId,
+        link_type: 'source_document',
+      });
+    }
+
+    await supabase.from('document_activity').insert({
+      document_id: docResult.data.id,
+      workspace_id: workspaceId,
+      activity_type: extractionStatus === 'pending_review' ? 'extraction_completed' : 'extraction_failed',
+      activity_json: { filename: file.name, extractionStatus, tenancyId: tenancyId || null },
     });
-    if (bundle.error) throw bundle.error;
-    const bundleData = bundle.data as { document: Record<string, unknown> & { id: string }; extraction: Record<string, unknown> & { id: string } };
-    const documentInsert = { data: bundleData.document };
-    const extractionInsert = { data: bundleData.extraction };
-    persistedDocumentId = documentInsert.data.id;
+
+    const documentInsert = { data: docResult.data };
+    const extractionInsert = { data: extractResult.data };
 
     if (extractionStatus === 'extraction_failed') return NextResponse.json({
       success: false, failedStage: 'ocr', affectedRecordIds: [documentInsert.data.id, extractionInsert.data.id], rollbackStatus: 'document-preserved',
       message: { en: textResult.status === 'not_configured' ? 'Document saved, but OCR is not configured.' : 'Document saved, but extraction failed. You can retry.', zh: textResult.status === 'not_configured' ? '文件已保存，但尚未配置 OCR。' : '文件已保存，但提取失败。您可以重试。' },
       technicalReference: textResult.error || 'document-extraction-failed', document: documentInsert.data, extraction: extractionInsert.data, retryAllowed: true
     }, { status: 422 });
+
+    void writeActivity(supabase, workspaceId, 'document', docResult.data.id, 'document_uploaded', { filename: file.name, document_type: documentType }, user.id);
 
     return NextResponse.json({
       success: true, failedStage: null, affectedRecordIds: [documentInsert.data.id, extractionInsert.data.id], rollbackStatus: 'not-required',

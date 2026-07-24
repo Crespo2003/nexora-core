@@ -118,7 +118,7 @@ test('production route contract, file paths, UI provider state, isolation and re
   assert.doesNotMatch(ui, /Advanced AI extraction is not configured yet/);
   assert.match(configRoute, /requireWorkspaceAccess/);
   assert.match(route, /\.eq\('workspace_id', workspaceId\)\.eq\('document_hash', documentHash\)/);
-  assert.match(route, /retryAllowed: \['ocr_required', 'extraction_failed'\]/);
+  assert.match(route, /retryableDocumentStatuses = \['ocr_required', 'extraction_failed'\]/);
   assert.doesNotMatch(client, /NEXT_PUBLIC_OPENAI|dangerouslyAllowBrowser:\s*true/);
 });
 

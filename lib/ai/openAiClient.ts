@@ -30,8 +30,12 @@ export type OpenAiStructuredRequest<T> = {
   fetcher?: typeof fetch;
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Timeout applied to the retry attempt only; defaults to timeoutMs when not provided. */
+  retryTimeoutMs?: number;
   maxAttempts?: number;
   requestId?: string;
+  /** Invoked immediately before each actual HTTP call to the Responses API, for call-count observability. */
+  onAttemptStart?: (attempt: number) => void;
   validate?: (value: unknown) => T;
   /** Parses a provider response when a product-specific response contract is required. */
   parseResponse?: (response: unknown) => T;
@@ -82,15 +86,30 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
   const config = getOpenAiConfiguration();
   if (!request.apiKey && !config.configured) throw new OpenAiClientError('openai_not_configured');
 
-  const attempts = Math.max(1, Math.min(request.maxAttempts ?? 3, 5));
+  // Controlled retry policy: 1 primary request plus at most 1 retry, and only for a
+  // genuine transient API/network failure (see isRetryableError). Callers cannot raise
+  // the ceiling above two attempts.
+  const attempts = Math.max(1, Math.min(request.maxAttempts ?? 2, 2));
   const model = request.model ?? config.tenancyModel;
   let lastError: OpenAiClientError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const attemptStartedAt = Date.now();
+    const maxOutputTokens = request.maxOutputTokens ?? 12_000;
+    const inputCharacterCount = request.system.length + request.prompt.length;
     try {
-      logOpenAiDiagnostic('request_started', { requestId: request.requestId, provider: 'openai', attempt, tenancyModel: model, openAiKeyPresent: true });
-      const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: request.timeoutMs, maxRetries: 0 });
+      logOpenAiDiagnostic('request_started', {
+        requestId: request.requestId,
+        provider: 'openai',
+        attempt,
+        tenancyModel: model,
+        openAiKeyPresent: true,
+        inputCharacterCount,
+        estimatedInputTokens: Math.ceil(inputCharacterCount / 4),
+        maxOutputTokens
+      });
+      const client = createOpenAiClient({ apiKey: request.apiKey, fetcher: request.fetcher, timeoutMs: attempt === 1 ? request.timeoutMs : (request.retryTimeoutMs ?? request.timeoutMs), maxRetries: 0 });
+      request.onAttemptStart?.(attempt);
       const response = await client.responses.create({
         model,
         store: false,
@@ -106,7 +125,7 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
             schema: request.schema
           }
         },
-        max_output_tokens: request.maxOutputTokens ?? 12_000
+        max_output_tokens: maxOutputTokens
       });
 
       const payload = response as unknown as ResponsesPayload;
@@ -118,6 +137,8 @@ export async function requestStructuredOpenAi<T>(request: OpenAiStructuredReques
         tenancyModel: model,
         upstreamRequestId: readResponseRequestId(response),
         elapsedMs: Date.now() - attemptStartedAt,
+        maxOutputTokens,
+        estimatedInputTokens: Math.ceil(inputCharacterCount / 4),
         ...responseDetails
       });
 
@@ -218,10 +239,14 @@ export function classifyOpenAiError(error: unknown): OpenAiClientError {
   return new OpenAiClientError('openai_request_failed');
 }
 
+/**
+ * Only genuine transient API/network failures qualify for the single retry. Content-quality
+ * outcomes (missing optional fields, low confidence, null values, schema-valid incomplete
+ * results, refusals, malformed output) never trigger a retry because repeating the same
+ * request cannot fix them and each extra call risks the platform time budget.
+ */
 function isRetryableError(error: OpenAiClientError): boolean {
-  if (error.code === 'openai_timeout' || error.code === 'invalid_ai_response' || error.code === 'openai_truncated') return true;
-  if (error.code === 'openai_empty_response' || error.code === 'openai_malformed_json' || error.code === 'openai_schema_mismatch') return true;
-  if (error.code === 'openai_rate_limited' || error.code === 'openai_server_error') return true;
+  if (error.code === 'openai_timeout' || error.code === 'openai_rate_limited' || error.code === 'openai_server_error') return true;
   if (error.code !== 'openai_request_failed') return false;
   return error.status === undefined || error.status === 408 || error.status === 409;
 }
