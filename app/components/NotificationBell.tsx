@@ -7,6 +7,8 @@ type Notification = {
   type: string;
   title: string;
   body: string;
+  title_zh?: string;
+  body_zh?: string;
   entity_type: string;
   entity_id: string;
   created_at: string;
@@ -31,10 +33,22 @@ function timeAgo(iso: string): string {
 }
 
 export default function NotificationBell() {
+  const [language, setLanguage] = useState<'en' | 'zh'>('en');
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem('nexora-language');
+    if (stored === 'zh') setLanguage('zh');
+    function onLanguage(event: Event) {
+      const next = (event as CustomEvent<'en' | 'zh'>).detail;
+      if (next === 'en' || next === 'zh') setLanguage(next);
+    }
+    window.addEventListener('nexora-language-change', onLanguage);
+    return () => window.removeEventListener('nexora-language-change', onLanguage);
+  }, []);
 
   useEffect(() => {
     fetch('/api/notifications')
@@ -76,21 +90,21 @@ export default function NotificationBell() {
       {open && (
         <div className="notif-dropdown" role="dialog" aria-label="Notifications">
           <div className="notif-dropdown-header">
-            <strong>Notifications</strong>
+            <strong>{language === 'zh' ? '通知' : 'Notifications'}</strong>
             {notifications.length > 0 && (
-              <button className="notif-clear-btn" onClick={markAllRead}>Mark all read</button>
+              <button className="notif-clear-btn" onClick={markAllRead}>{language === 'zh' ? '全部标为已读' : 'Mark all read'}</button>
             )}
           </div>
           {notifications.length === 0 ? (
-            <p className="notif-empty">No notifications.</p>
+            <p className="notif-empty">{language === 'zh' ? '暂无通知。' : 'No notifications.'}</p>
           ) : (
             <ul className="notif-list">
               {notifications.slice(0, 20).map((n) => (
                 <li key={n.id} className="notif-item">
                   <span className="notif-icon">{typeIcon(n.type)}</span>
                   <div className="notif-body">
-                    <span className="notif-title">{n.title}</span>
-                    {n.body && <span className="notif-sub">{n.body}</span>}
+                    <span className="notif-title">{language === 'zh' ? n.title_zh ?? n.title : n.title}</span>
+                    {n.body && <span className="notif-sub">{language === 'zh' ? n.body_zh ?? n.body : n.body}</span>}
                   </div>
                   <span className="notif-time">{timeAgo(n.created_at)}</span>
                 </li>

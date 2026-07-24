@@ -20,10 +20,10 @@ export type NavPage =
 
 export const NAV_ACCESS: Record<NavPage, WorkspaceRole[]> = {
   home:        ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
-  crm:         ['owner', 'admin', 'manager', 'agent'],
+  crm:         ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
   listings:    ['owner', 'admin', 'manager', 'agent'],
-  deals:       ['owner', 'admin', 'manager', 'agent'],
-  viewings:    ['owner', 'admin', 'manager', 'agent'],
+  deals:       ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
+  viewings:    ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
   dashboard:   ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
   tenancies:   ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],
   documents:   ['owner', 'admin', 'manager', 'agent', 'finance', 'viewer'],

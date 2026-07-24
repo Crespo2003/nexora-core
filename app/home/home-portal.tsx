@@ -8,6 +8,8 @@ import { usePortalLanguage } from '../components/usePortalLanguage';
 import { formatMYR } from '../../lib/formatters';
 import { currentIsoDate } from '../../lib/dates/formatDate';
 import { getTranslations } from '../../lib/i18n/translations';
+import { crmStageLabel, isCrmPipelineStage } from '../../lib/crm/pipeline';
+import { crmEnumLabel } from '../../lib/i18n/crm';
 import type { NavPage, WorkspaceRole } from '../../lib/rbac/permissions';
 import { canAccess } from '../../lib/rbac/permissions';
 import { visiblePortalNavigation } from '../../lib/portal/navigation';
@@ -31,8 +33,15 @@ type DashboardData = {
   recentActivities: Activity[];
   upcomingFollowups: Followup[];
 };
-type Deal = { id: string; title?: string | null; stage?: string | null; deal_value?: number | string | null; probability?: number | null; next_follow_up?: string | null };
-type Appointment = { id: string; viewing_date?: string | null; location?: string | null; viewing_status?: string | null; attendees?: string[] | null };
+type Deal = { id: string; title?: string | null; stage?: string | null; deal_value?: number | string | null; probability?: number | null; updated_at?: string | null };
+type Appointment = { id: string; title?: string | null; start_at?: string | null; location?: string | null; status?: string | null; appointment_type?: string | null; contact?: { full_name?: string | null; company_name?: string | null } | null };
+type CrmSummary = {
+  deals: Deal[];
+  appointments: Appointment[];
+  urgent: Array<{ id: string; title?: string | null; due_at?: string | null; priority?: string | null; enquiry_id?: string | null; deal_id?: string | null }>;
+  recentActivity: Activity[];
+  metrics: { activeEnquiries: number; newEnquiriesToday: number; hotLeads: number; followUpsDueToday: number; viewingsToday: number; activeDeals: number; activeDealValue: number };
+};
 
 type Loadable<T> = {
   data: T | null;
@@ -53,8 +62,9 @@ const emptyMetrics: Metrics = {
 const QUICK_ACTIONS: Array<{ key: keyof ReturnType<typeof getTranslations>['portal']['quickAdd']; href: string; permission: NavPage }> = [
   { key: 'enquiry', href: '/crm?action=new-enquiry', permission: 'crm' },
   { key: 'listing', href: '/listings?action=new-listing', permission: 'listings' },
-  { key: 'viewing', href: '/viewings?action=new-viewing', permission: 'viewings' },
-  { key: 'appointment', href: '/viewings?action=new-appointment', permission: 'viewings' },
+  { key: 'viewing', href: '/appointments?action=new-viewing', permission: 'viewings' },
+  { key: 'appointment', href: '/appointments?action=new-appointment', permission: 'viewings' },
+  { key: 'followUp', href: '/crm?action=new-follow-up', permission: 'crm' },
   { key: 'deal', href: '/deals?action=new-deal', permission: 'deals' },
   { key: 'tenancy', href: '/?action=new-tenancy', permission: 'tenancies' },
   { key: 'commercialLead', href: '/commercial/leads?action=new-lead', permission: 'commercial' },
@@ -120,30 +130,20 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
   const role = initialRole;
   const [quickOpen, setQuickOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Loadable<DashboardData>>({ data: null, loading: true, error: false });
-  const [deals, setDeals] = useState<Loadable<Deal[]>>({ data: null, loading: true, error: false });
-  const [appointments, setAppointments] = useState<Loadable<Appointment[]>>({ data: null, loading: true, error: false });
+  const [crm, setCrm] = useState<Loadable<CrmSummary>>({ data: null, loading: true, error: false });
 
   useEffect(() => {
     let active = true;
-    const canLoadDeals = canAccess(initialRole, 'commercial');
     void Promise.allSettled([
       fetchPayload<DashboardData & { success: boolean }>('/api/dashboard'),
-      canLoadDeals
-        ? fetchPayload<{ success: boolean; rows?: Deal[] }>('/api/commercial/deals')
-        : Promise.resolve({ success: true, rows: [] as Deal[] }),
-      canLoadDeals
-        ? fetchPayload<{ success: boolean; rows?: Appointment[] }>('/api/commercial/viewings')
-        : Promise.resolve({ success: true, rows: [] as Appointment[] }),
-    ]).then(([dashboardResult, dealsResult, appointmentsResult]) => {
+      fetchPayload<CrmSummary & { success: boolean }>('/api/crm/summary'),
+    ]).then(([dashboardResult, crmResult]) => {
       if (!active) return;
       setDashboard(dashboardResult.status === 'fulfilled'
         ? { data: { ...dashboardResult.value, metrics: dashboardResult.value.metrics ?? emptyMetrics }, loading: false, error: false }
         : { data: null, loading: false, error: true });
-      setDeals(dealsResult.status === 'fulfilled'
-        ? { data: dealsResult.value.rows ?? [], loading: false, error: false }
-        : { data: null, loading: false, error: true });
-      setAppointments(appointmentsResult.status === 'fulfilled'
-        ? { data: appointmentsResult.value.rows ?? [], loading: false, error: false }
+      setCrm(crmResult.status === 'fulfilled'
+        ? { data: crmResult.value, loading: false, error: false }
         : { data: null, loading: false, error: true });
     });
     return () => { active = false; };
@@ -176,19 +176,28 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
         detail: item.status?.replaceAll('_', ' ') ?? '',
         href: '/commercial/follow-ups',
       }));
-    return [...expiries, ...followups];
-  }, [dashboard.data, t]);
+    const crmFollowups = (crm.data?.urgent ?? []).map((item) => ({
+      id: `crm-followup-${item.id}`,
+      title: item.title || t.portal.home.urgentToday,
+      detail: item.priority ? crmEnumLabel(item.priority, language) : '',
+      href: item.enquiry_id ? `/crm?enquiry=${item.enquiry_id}` : '/crm',
+    }));
+    return [...expiries, ...followups, ...crmFollowups];
+  }, [crm.data, dashboard.data, t]);
 
   const quickActions = QUICK_ACTIONS.filter((action) => canAccess(role, action.permission));
-  const activeDeals = (deals.data ?? []).filter((deal) => !['completed', 'lost', 'cancelled'].includes(deal.stage ?? ''));
-  const upcomingAppointments = (appointments.data ?? [])
+  const activeDeals = (crm.data?.deals ?? []).filter((deal) => !['CLOSED', 'LOST', 'AFTER_SALES'].includes(deal.stage ?? ''));
+  const upcomingAppointments = (crm.data?.appointments ?? [])
     .filter((appointment) => {
-      const date = safeDate(appointment.viewing_date);
-      return date && date.getTime() >= Date.now() && !['completed', 'cancelled'].includes(appointment.viewing_status ?? '');
+      const date = safeDate(appointment.start_at);
+      return date && date.getTime() >= Date.now() && !['completed', 'cancelled'].includes(appointment.status ?? '');
     })
-    .sort((left, right) => (safeDate(left.viewing_date)?.getTime() ?? 0) - (safeDate(right.viewing_date)?.getTime() ?? 0))
+    .sort((left, right) => (safeDate(left.start_at)?.getTime() ?? 0) - (safeDate(right.start_at)?.getTime() ?? 0))
     .slice(0, 5);
   const metrics = dashboard.data?.metrics ?? emptyMetrics;
+  const recentActivities = [...(crm.data?.recentActivity ?? []), ...(dashboard.data?.recentActivities ?? [])]
+    .sort((left, right) => (safeDate(right.created_at)?.getTime() ?? 0) - (safeDate(left.created_at)?.getTime() ?? 0))
+    .slice(0, 6);
 
   return (
     <main className="command-shell portal-home">
@@ -246,7 +255,7 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
         <PortalWidgetBoundary fallback={<WidgetFallback text={t.portal.home.widgetUnavailable} />}>
           <section className="panel portal-widget">
             <div className="portal-section-heading"><div><Clock3 size={18} /><h2>{t.portal.home.upcomingAppointments}</h2></div></div>
-            {appointments.loading ? <div className="portal-line-skeleton" /> : appointments.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : upcomingAppointments.length === 0 ? (
+            {crm.loading ? <div className="portal-line-skeleton" /> : crm.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : upcomingAppointments.length === 0 ? (
               <div className="portal-empty">
                 <strong>{t.portal.home.noAppointments}</strong>
                 <span>{t.portal.home.noAppointmentsBody}</span>
@@ -255,9 +264,9 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
               <ul className="portal-compact-list">
                 {upcomingAppointments.map((appointment) => (
                   <li key={appointment.id}>
-                    <a href="/commercial">
-                      <strong>{appointment.location || appointment.attendees?.join(', ') || '—'}</strong>
-                      <span>{displayDateTime(appointment.viewing_date, language)} · {appointment.viewing_status ?? 'scheduled'}</span>
+                    <a href="/appointments">
+                      <strong>{appointment.title || appointment.location || appointment.contact?.full_name || appointment.contact?.company_name || '—'}</strong>
+                      <span>{displayDateTime(appointment.start_at, language)} · {appointment.status ?? 'scheduled'}</span>
                     </a>
                   </li>
                 ))}
@@ -268,16 +277,16 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
 
         <PortalWidgetBoundary fallback={<WidgetFallback text={t.portal.home.widgetUnavailable} />}>
           <section className="panel portal-widget">
-            <div className="portal-section-heading"><div><TrendingUp size={18} /><h2>{t.portal.home.dealPipeline}</h2></div><a href="/commercial/deals">{t.portal.home.openWorkspace} →</a></div>
-            {deals.loading ? <div className="portal-line-skeleton" /> : deals.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : activeDeals.length === 0 ? (
+            <div className="portal-section-heading"><div><TrendingUp size={18} /><h2>{t.portal.home.dealPipeline}</h2></div><a href="/deals">{t.portal.home.openWorkspace} →</a></div>
+            {crm.loading ? <div className="portal-line-skeleton" /> : crm.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : activeDeals.length === 0 ? (
               <div className="portal-empty"><strong>{t.portal.home.noDeals}</strong></div>
             ) : (
               <ul className="portal-compact-list">
                 {activeDeals.slice(0, 5).map((deal) => (
                   <li key={deal.id}>
-                    <a href={`/commercial/deals/${deal.id}`}>
+                    <a href="/deals">
                       <strong>{deal.title || '—'}</strong>
-                      <span>{deal.stage?.replaceAll('_', ' ') ?? '—'}{deal.deal_value ? ` · ${formatMYR(Number(deal.deal_value))}` : ''}</span>
+                      <span>{isCrmPipelineStage(deal.stage) ? crmStageLabel(deal.stage, language) : deal.stage?.replaceAll('_', ' ') ?? '—'}{deal.deal_value ? ` · ${formatMYR(Number(deal.deal_value))}` : ''}</span>
                     </a>
                   </li>
                 ))}
@@ -289,11 +298,11 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
         <PortalWidgetBoundary fallback={<WidgetFallback text={t.portal.home.widgetUnavailable} />}>
           <section className="panel portal-widget">
             <div className="portal-section-heading"><div><Clock3 size={18} /><h2>{t.portal.home.recentActivity}</h2></div></div>
-            {dashboard.loading ? <div className="portal-line-skeleton" /> : dashboard.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : (dashboard.data?.recentActivities ?? []).length === 0 ? (
+            {dashboard.loading && crm.loading ? <div className="portal-line-skeleton" /> : dashboard.error && crm.error ? <WidgetFallback text={t.portal.home.widgetUnavailable} /> : recentActivities.length === 0 ? (
               <div className="portal-empty"><strong>{t.portal.home.noActivity}</strong></div>
             ) : (
               <ul className="portal-activity-list">
-                {(dashboard.data?.recentActivities ?? []).slice(0, 6).map((activity) => (
+                {recentActivities.map((activity) => (
                   <li key={activity.id}><span className="portal-activity-dot" /><div><strong>{activityText(activity)}</strong><span>{displayDate(activity.created_at, language)}</span></div></li>
                 ))}
               </ul>
@@ -311,6 +320,11 @@ export default function HomePortal({ initialRole }: { initialRole: WorkspaceRole
                 <Metric label={t.portal.home.outstanding} value={formatMYR(metrics.outstandingTotal)} />
                 <Metric label={t.portal.home.expiringSoon} value={String(metrics.expiringIn30Count)} />
                 <Metric label={t.portal.home.renewalsThisMonth} value={String(metrics.renewalsThisMonth)} />
+                <Metric label={language === 'zh' ? '今日新询盘' : 'New enquiries today'} value={String(crm.data?.metrics.newEnquiriesToday ?? 0)} />
+                <Metric label={language === 'zh' ? '热门客户' : 'Hot leads'} value={String(crm.data?.metrics.hotLeads ?? 0)} />
+                <Metric label={language === 'zh' ? '今日待跟进' : 'Follow-ups due today'} value={String(crm.data?.metrics.followUpsDueToday ?? 0)} />
+                <Metric label={language === 'zh' ? '今日看房' : 'Viewings today'} value={String(crm.data?.metrics.viewingsToday ?? 0)} />
+                <Metric label={language === 'zh' ? '活跃交易' : 'Active deals'} value={String(crm.data?.metrics.activeDeals ?? 0)} />
               </div>
             )}
           </section>

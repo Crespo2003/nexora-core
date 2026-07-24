@@ -1,9 +1,7 @@
-import PortalPlaceholder from '../components/PortalPlaceholder';
-import { requirePortalPageAccess } from '../../lib/auth/portalPageAccess';
+import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ViewingsPage() {
-  await requirePortalPageAccess('viewings');
-  return <PortalPlaceholder page="viewings" labelKey="viewingsAppointments" />;
+  redirect('/appointments');
 }

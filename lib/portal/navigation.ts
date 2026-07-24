@@ -29,7 +29,7 @@ export const PORTAL_NAVIGATION: PortalNavigationGroup[] = [
       { key: 'crm', href: '/crm', labelKey: 'crm', descriptionKey: 'crm' },
       { key: 'listings', href: '/listings', labelKey: 'listings', descriptionKey: 'listings' },
       { key: 'deals', href: '/deals', labelKey: 'deals', descriptionKey: 'deals' },
-      { key: 'viewings', href: '/viewings', labelKey: 'viewingsAppointments', descriptionKey: 'viewings' },
+      { key: 'viewings', href: '/appointments', labelKey: 'viewingsAppointments', descriptionKey: 'viewings' },
       { key: 'tenancies', href: '/', labelKey: 'rentalManagement', descriptionKey: 'tenancies' },
       { key: 'commercial', href: '/commercial', labelKey: 'commercial', descriptionKey: 'commercial' },
     ],

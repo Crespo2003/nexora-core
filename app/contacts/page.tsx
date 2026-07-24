@@ -1,9 +1,9 @@
-import PortalPlaceholder from '../components/PortalPlaceholder';
 import { requirePortalPageAccess } from '../../lib/auth/portalPageAccess';
+import ContactsWorkspace from './contacts-workspace';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ContactsPage() {
-  await requirePortalPageAccess('contacts');
-  return <PortalPlaceholder page="contacts" labelKey="contacts" />;
+  const membership = await requirePortalPageAccess('contacts');
+  return <ContactsWorkspace initialRole={membership.role} />;
 }

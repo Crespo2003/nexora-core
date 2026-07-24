@@ -1,9 +1,9 @@
-import PortalPlaceholder from '../components/PortalPlaceholder';
 import { requirePortalPageAccess } from '../../lib/auth/portalPageAccess';
+import DealsWorkspace from './deals-workspace';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DealsPage() {
-  await requirePortalPageAccess('deals');
-  return <PortalPlaceholder page="deals" labelKey="deals" />;
+  const membership = await requirePortalPageAccess('deals');
+  return <DealsWorkspace initialRole={membership.role} />;
 }

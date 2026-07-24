@@ -13,6 +13,7 @@ type SearchItem = {
 type SearchGroup = {
   type: string;
   label: string;
+  label_zh?: string;
   items: SearchItem[];
 };
 
@@ -22,12 +23,24 @@ type SearchPayload = {
 };
 
 export default function GlobalSearch() {
+  const [language, setLanguage] = useState<'en' | 'zh'>('en');
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [groups, setGroups] = useState<SearchGroup[]>([]);
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem('nexora-language');
+    if (stored === 'zh') setLanguage('zh');
+    function onLanguage(event: Event) {
+      const next = (event as CustomEvent<'en' | 'zh'>).detail;
+      if (next === 'en' || next === 'zh') setLanguage(next);
+    }
+    window.addEventListener('nexora-language-change', onLanguage);
+    return () => window.removeEventListener('nexora-language-change', onLanguage);
+  }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -73,12 +86,12 @@ export default function GlobalSearch() {
 
   return (
     <>
-      <button className="search-trigger" onClick={() => setOpen(true)} aria-label="Open search (Ctrl+K)">
+      <button className="search-trigger" onClick={() => setOpen(true)} aria-label={language === 'zh' ? '打开搜索 (Ctrl+K)' : 'Open search (Ctrl+K)'}>
         <svg className="search-trigger-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <circle cx="6.5" cy="6.5" r="5" stroke="currentColor" strokeWidth="1.5" />
           <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
-        <span className="search-trigger-label">Search</span>
+        <span className="search-trigger-label">{language === 'zh' ? '搜索' : 'Search'}</span>
         <kbd className="search-trigger-kbd">Ctrl K</kbd>
       </button>
 
@@ -101,7 +114,7 @@ export default function GlobalSearch() {
                 className="search-input"
                 type="search"
                 autoComplete="off"
-                placeholder="Search tenants, properties, documents, leads…"
+                placeholder={language === 'zh' ? '搜索客户、询盘、预约、交易、房产和文件…' : 'Search clients, enquiries, appointments, deals, properties, documents…'}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -114,7 +127,7 @@ export default function GlobalSearch() {
             <div className="search-body">
               {!query && (
                 <p className="search-hint">
-                  Search across tenants, landlords, properties, documents, and commercial leads.
+                  {language === 'zh' ? '搜索客户、询盘、预约、交易、租约、房产和文件。' : 'Search across clients, enquiries, appointments, deals, tenancies, properties, and documents.'}
                 </p>
               )}
 
@@ -125,8 +138,8 @@ export default function GlobalSearch() {
               {hasResults && (
                 <div className="search-results" role="list">
                   {groups.map((g) => (
-                    <div key={g.type} className="search-group" role="group" aria-label={g.label}>
-                      <div className="search-group-label">{g.label}</div>
+                    <div key={g.type} className="search-group" role="group" aria-label={language === 'zh' ? g.label_zh ?? g.label : g.label}>
+                      <div className="search-group-label">{language === 'zh' ? g.label_zh ?? g.label : g.label}</div>
                       {g.items.map((item) => (
                         <a
                           key={item.id}
