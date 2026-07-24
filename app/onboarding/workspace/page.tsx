@@ -25,7 +25,7 @@ export default function WorkspaceOnboardingPage() {
     const result = await response.json();
     setBusy(false);
     if (!response.ok || !result.success) return setNotice(t.failed);
-    window.location.assign('/');
+    window.location.assign('/home');
   }
 
   return (

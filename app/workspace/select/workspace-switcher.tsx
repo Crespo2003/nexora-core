@@ -11,7 +11,7 @@ export default function WorkspaceSwitcher({ workspaces }: { workspaces: Switcher
     setBusy(workspaceId); setError('');
     const response = await fetch('/api/workspaces/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceId }) });
     if (!response.ok) { setBusy(null); setError('Unable to switch workspace / 无法切换工作区'); return; }
-    window.location.assign('/');
+    window.location.assign('/home');
   }
   return <div className="workspace-list">{workspaces.map((workspace) => <button key={workspace.workspaceId} className="secondary-button" disabled={busy !== null} onClick={() => select(workspace.workspaceId)}><strong>{workspace.name}</strong><span>{workspace.role}</span>{busy === workspace.workspaceId ? ' …' : ''}</button>)}{error && <div className="notice warning">{error}</div>}</div>;
 }

@@ -41,7 +41,7 @@ test('safe next rejects open redirects', () => {
 
 test('membership routing covers no, one, many, and suspended memberships', () => {
   assert.equal(destinationForMemberships([]), '/onboarding/workspace');
-  assert.equal(destinationForMemberships([{ workspaceId: 'a', status: 'active' }]), '/');
+  assert.equal(destinationForMemberships([{ workspaceId: 'a', status: 'active' }]), '/home');
   assert.equal(destinationForMemberships([{ workspaceId: 'a', status: 'active' }, { workspaceId: 'b', status: 'active' }]), '/workspace/select');
   assert.match(destinationForMemberships([{ workspaceId: 'a', status: 'suspended' }]), /access-denied/);
 });

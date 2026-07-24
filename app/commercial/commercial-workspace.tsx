@@ -145,7 +145,7 @@ export default function CommercialWorkspace({ view, detailId }: { view: View; de
     <aside className={`commercial-sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="commercial-brand"><span>N</span><div><strong>Nexora</strong><small>Commercial OS</small></div><button onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={18} /></button></div>
       <nav>{nav.map((item) => { const Icon = item.icon; return <Link key={item.view} href={item.href} className={item.view === view ? 'active' : ''}><Icon size={17} /><span>{item[language]}</span></Link>; })}</nav>
-      <Link href="/" className="commercial-back"><ArrowLeft size={16} />{language === 'zh' ? '租赁指挥中心' : 'Rental Command Centre'}</Link>
+      <Link href="/home" className="commercial-back"><ArrowLeft size={16} />{language === 'zh' ? '返回首页' : 'Back to Home'}</Link>
     </aside>
     <section className="commercial-main">
       <header className="commercial-header">

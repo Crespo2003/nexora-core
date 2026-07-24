@@ -114,7 +114,7 @@ export default function PropertyIntelligenceWorkspace({ view }: { view: Property
     <aside className={`pi-sidebar ${menuOpen ? 'open' : ''}`}>
       <div className="pi-brand"><span>NX</span><div><strong>Nexora AI</strong><small>Property Intelligence</small></div><button className="pi-close" onClick={() => setMenuOpen(false)} aria-label="Close navigation"><X size={18}/></button></div>
       <nav>{navigation.map((item) => <Link key={item.view} href={item.href} className={item.view === view ? 'active' : ''} onClick={() => setMenuOpen(false)}><item.icon size={17}/><span>{item.label}<small>{item.zh}</small></span></Link>)}</nav>
-      <Link className="pi-back" href="/commercial"><ArrowLeft size={16}/> Commercial CRM</Link>
+      <Link className="pi-back" href="/home"><ArrowLeft size={16}/>{language === 'zh' ? '返回首页' : 'Back to Home'}</Link>
     </aside>
     <main className="pi-main">
       <header className="pi-header">
